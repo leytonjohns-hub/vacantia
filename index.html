@@ -808,6 +808,17 @@ const CONFIG = {
 let ID_TOKEN = null;
 
 const API = {
+  /* «¿Hay alguien instalado?» Única consulta sin identidad. Devuelve un
+     booleano y nada más: ni nombres, ni cuentas, ni cuántas personas hay. */
+  async estado(){
+    if (CONFIG.modo === "local") return { instalado: !!DB.personas.length };
+    const r = await fetch(`${CONFIG.endpointRemoto}?accion=estado`);
+    if (!r.ok) throw new Error(`El servidor respondió ${r.status}`);
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || "El servidor no respondió al estado.");
+    return j;
+  },
+
   async cargar(){
     if (CONFIG.modo === "local") return null;
     if (!ID_TOKEN) return null;                       // sin sesión no hay nada que cargar
@@ -1554,6 +1565,17 @@ async function arranque(){
         Completa <code>CONFIG.endpointRemoto</code> y <code>CONFIG.clienteGoogle</code>.</div>`;
       return;
     }
+    const previo = caja.innerHTML;
+    caja.innerHTML = `<div class="cargando">${ic("clock")}<span>Conectando con el servidor…</span></div>`;
+    try {
+      const e = await API.estado();
+      SISTEMA_INSTALADO = e.instalado;
+      caja.innerHTML = previo;
+    } catch (err){
+      caja.innerHTML = `<div class="note err"><strong>${ic("x")}No pudimos conectar con el servidor</strong>
+        ${esc(err.message)}. Revisa <code>CONFIG.endpointRemoto</code>, o si el despliegue de Apps Script está publicado.</div>`;
+      return;
+    }
   } else if (CONFIG.datosDemo){
     sembrarEmpresaDemo();
     sembrarDemo();
@@ -1645,7 +1667,12 @@ function pintarComarca(){
   });
 }
 
-const sistemaVacio = () => !DB.personas.length;
+/* En remoto el navegador no tiene la base —solo la recibe quien acredita
+   identidad—, así que no puede contar personas. Se lo pregunta al servidor.
+   Sin esto, el asistente de instalación reaparecería para siempre.        */
+let SISTEMA_INSTALADO = null;
+const sistemaVacio = () => CONFIG.modo === "remoto" ? SISTEMA_INSTALADO === false
+                                                    : !DB.personas.length;
 
 function montarIngreso(){
   if (sistemaVacio()) return montarAsistente();
@@ -1926,6 +1953,7 @@ async function instalar(){
   // En remoto la empresa quedó creada en el servidor, pero nadie ha acreditado
   // identidad todavía. Hay que entrar con Google como cualquier otro día.
   if (CONFIG.modo === "remoto"){
+    SISTEMA_INSTALADO = true;
     return abrir(`<h2>${ic("check")}La empresa quedó creada</h2>
       <p style="color:var(--gray);margin-top:8px;font-size:14px">Ahora entra con la cuenta de Google que registraste: <b>${esc(a.cuentaGoogle)}</b>. Desde ahí completas el organigrama y creas al resto.</p>
       <div class="actions"><button id="ok" class="btn-primary">${ic("right")}Entrar con Google</button></div>`),
