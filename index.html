@@ -126,7 +126,10 @@
 <meta name="copyright" content="© 2026 Luis Leyton-Johns. Todos los derechos reservados.">
 <meta name="description" content="VACANTIA — Intelligent Leave Management. Sistema de gestión de vacaciones conforme a la legislación laboral chilena.">
 <meta name="theme-color" content="#0F4C5C">
-<title>VACANTIA — Intelligent Leave Management</title>
+<!-- La marca no se traduce. Chrome partía VACAN|TIA en dos palabras y la
+     convertía en «VACANTE TIA». El sistema es en español; no hay nada que traducir. -->
+<meta name="google" content="notranslate">
+<title translate="no">VACANTIA — Intelligent Leave Management</title>
 <!-- v1.4 · CONFIG al inicio del script: modo, endpointRemoto, clienteGoogle, datosDemo. -->
 
 <!-- Favicon en línea: sin archivo externo, escala en cualquier tamaño. -->
@@ -492,9 +495,9 @@ a{color:var(--primary)}
       <div class="mark">
         <svg viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="#0F4C5C"/>
           <path d="M18 20 L32 45 L46 20" fill="none" stroke="#2EC4B6" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <div class="w">VACAN<span>TIA</span></div>
+        <div class="w notranslate" translate="no">VACAN<span>TIA</span></div>
       </div>
-      <p>Intelligent Leave Management</p>
+      <p class="notranslate" translate="no">Intelligent Leave Management</p>
       <div class="comarca" id="comarcaLogin" hidden style="margin-top:18px">
         <div class="sep"></div><img id="logoLogin" alt="">
       </div>
@@ -533,7 +536,7 @@ a{color:var(--primary)}
     </div>
 
     <p style="text-align:center;color:var(--gray);font-size:11.5px;margin-top:30px;line-height:1.7">
-      VACANTIA™ — Intelligent Leave Management<br>
+      <span class="notranslate" translate="no">VACANTIA™ — Intelligent Leave Management</span><br>
       Una obra de <b style="color:var(--text);font-weight:600">Luis Leyton-Johns</b> ·
       <a href="https://linkedin.com/in/luis-leyton-johns">LinkedIn</a> ·
       ORCID <a href="https://orcid.org/0000-0002-4462-403X">0000-0002-4462-403X</a><br>
@@ -547,7 +550,7 @@ a{color:var(--primary)}
 <header>
   <div class="hwrap">
     <div class="comarca">
-      <div class="brand">VACAN<span>TIA</span></div>
+      <div class="brand notranslate" translate="no">VACAN<span>TIA</span></div>
       <div class="sep" id="sepLogo" hidden></div>
       <img id="logoCliente" alt="" hidden>
     </div>
@@ -672,7 +675,7 @@ a{color:var(--primary)}
 <footer>
   <hr>
   <div class="rights">
-    <span class="c">VACANTIA™ — Intelligent Leave Management</span>
+    <span class="c notranslate" translate="no">VACANTIA™ — Intelligent Leave Management</span>
     <span>© 2026 Luis Leyton-Johns. Todos los derechos reservados.</span>
   </div>
   <p>Creador y titular de los derechos de esta obra: <b>Luis Leyton-Johns</b> ·
@@ -3816,7 +3819,7 @@ function comprobanteHTML(x){
   return `<div class="docwrap">
     <div class="docband">
       ${e.logo ? `<img src="${e.logo}" alt="${esc(e.nombre)}">` : `<div style="font-family:Manrope;font-weight:700;font-size:15px">${esc(e.nombre)}</div>`}
-      <div class="vm">VACAN<span>TIA</span><small>Intelligent Leave Management</small></div>
+      <div class="vm notranslate" translate="no">VACAN<span>TIA</span><small>Intelligent Leave Management</small></div>
     </div>
 
     <div class="doctitle">
@@ -3942,7 +3945,7 @@ function docBanda(){
   const e = DB.empresa;
   return `<div class="docband">
     ${e.logo ? `<img src="${e.logo}" alt="${esc(e.nombre)}">` : `<div style="font-family:Manrope;font-weight:700;font-size:15px">${esc(e.nombre)}</div>`}
-    <div class="vm">VACAN<span>TIA</span><small>Intelligent Leave Management</small></div>
+    <div class="vm notranslate" translate="no">VACAN<span>TIA</span><small>Intelligent Leave Management</small></div>
   </div>`;
 }
 
