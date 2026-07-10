@@ -2821,14 +2821,15 @@ function panelOrganigrama(perm, v){
     bind(){
       $("nuevoC").onclick = () => formCargo(null, v);
       [...document.querySelectorAll("[data-ec]")].forEach(b => b.onclick = () => formCargo(b.dataset.ec, v));
-      [...document.querySelectorAll("[data-dc]")].forEach(b => b.onclick = () => {
+      [...document.querySelectorAll("[data-dc]")].forEach(b => b.onclick = async () => {
         const id = b.dataset.dc;
         const n = DB.personas.filter(p => p.cargoId === id).length;
         const h = DB.cargos.filter(c => c.dependeDe === id).length;
         if (n || h) return bloqueo(
           n ? `Hay ${n} persona${n===1?"":"s"} con este cargo` : `Hay ${h} cargo${h===1?"":"s"} que dependen de este`,
           n ? "Reasígnalas a otro cargo primero." : "Reasigna primero su dependencia.");
-        DB.cargos = DB.cargos.filter(c => c.id !== id); refrescar(v);
+        const ok = await conRed("quitar_cargo", { id }, () => { DB.cargos = DB.cargos.filter(c => c.id !== id); });
+        if (ok) refrescar(v);
       });
     }
   };
@@ -2851,7 +2852,7 @@ function formCargo(id, v){
     </div><div id="fErr"></div>
     <div class="actions"><button id="g" class="btn-primary">Guardar</button><button id="x" class="btn-ghost">Cancelar</button></div>`);
   $("x").onclick = cerrar;
-  $("g").onclick = () => {
+  $("g").onclick = async () => {
     const n = $("c_n").value.trim(), err = t => $("fErr").innerHTML = `<div class="note err"><strong>${ic("x")}${t}</strong></div>`;
     if (!n) return err("El nombre es obligatorio.");
     if (DB.cargos.some(k => k.nombre.toLowerCase() === n.toLowerCase() && k.id !== id))
@@ -2860,9 +2861,14 @@ function formCargo(id, v){
     if (!padre && DB.cargos.some(k => !k.dependeDe && k.id !== id))
       return err("Ya existe un cargo raíz. Solo la Gerencia General puede no depender de nadie.");
     if (id && padre && crearCiclo(id, padre)) return err("Esa dependencia crearía un ciclo en el organigrama.");
-    if (c) sellar(Object.assign(c, {nombre:n, dependeDe:padre, familia:$("c_f").value}));
-    else DB.cargos.push(sellar({ id:"C"+(Date.now()%100000), nombre:n, dependeDe:padre, familia:$("c_f").value }));
-    log("Organigrama modificado", `${n} · depende de ${padre?cargoNom(padre):"nadie (raíz)"} · por ${nombreCuenta(actorReal())}`);
+    const famf = $("c_f").value;
+    const ok = await conRed("guardar_cargo",
+      c ? { id:c.id, nombre:n, dependeDe:padre, familia:famf } : { nombre:n, dependeDe:padre, familia:famf }, () => {
+        if (c) sellar(Object.assign(c, {nombre:n, dependeDe:padre, familia:famf}));
+        else DB.cargos.push(sellar({ id:"C"+(Date.now()%100000), nombre:n, dependeDe:padre, familia:famf }));
+        log("Organigrama modificado", `${n} · depende de ${padre?cargoNom(padre):"nadie (raíz)"} · por ${nombreCuenta(actorReal())}`);
+      });
+    if (!ok) return;
     cerrar(); refrescar(v);
   };
 }
@@ -3793,7 +3799,7 @@ function formPersona(rut, v){
   revisarApertura();
 
   $("x").onclick = cerrar;
-  $("g").onclick = () => {
+  $("g").onclick = async () => {
     const num = $("f_num").value.trim(), dv = $("f_dv").value.trim().toLowerCase();
     const err = t => $("fErr").innerHTML = `<div class="note err"><strong>${ic("x")}${t}</strong></div>`;
     if (!p){
@@ -3817,10 +3823,14 @@ function formPersona(rut, v){
       tramoLargoMigrado:$("f_tramo").checked
     };
     // La dotación no otorga permisos. Los roles y la cuenta se administran aparte.
-    if (p){ Object.assign(p, datos); sellar(p); log("Trabajador editado", `${nombreLargo(p.rut)} · por ${nombreCuenta(actorReal())}`); }
-    else { DB.personas.push(sellar({ rut:`${num}-${dv}`, ajustes:[],
-                              reconocidosRespaldo:"", progresivo:{activo:false, fecha:null, respaldo:""}, ...datos }));
-           log("Trabajador creado", `${datos.n1} ${datos.a1} · ${num}-${dv} · por ${nombreCuenta(actorReal())}`); }
+    const rutp = p ? p.rut : `${num}-${dv}`;
+    const ok = await conRed("guardar_persona", { rut:rutp, datos }, () => {
+      if (p){ Object.assign(p, datos); sellar(p); log("Trabajador editado", `${nombreLargo(p.rut)} · por ${nombreCuenta(actorReal())}`); }
+      else { DB.personas.push(sellar({ rut:rutp, ajustes:[],
+                                reconocidosRespaldo:"", progresivo:{activo:false, fecha:null, respaldo:""}, ...datos }));
+             log("Trabajador creado", `${datos.n1} ${datos.a1} · ${rutp} · por ${nombreCuenta(actorReal())}`); }
+    });
+    if (!ok) return;
     cerrar(); refrescar(v);
   };
 }
@@ -3841,10 +3851,13 @@ function borrarPersona(rut, v){
     <div class="actions"><button id="x" class="btn-danger" ${bloqueado?"disabled":""}>${ic("trash")}Eliminar definitivamente</button>
       <button id="c" class="btn-ghost">Cancelar</button></div>`);
   $("c").onclick = cerrar;
-  if (!bloqueado) $("x").onclick = () => {
-    log("Trabajador eliminado", `${nombreLargo(rut)}`);
-    DB.cuentas = DB.cuentas.filter(x => x.rut !== rut);   // su cuenta muere con él
-    DB.personas = DB.personas.filter(p => p.rut !== rut); cerrar(); refrescar(v);
+  if (!bloqueado) $("x").onclick = async () => {
+    const ok = await conRed("eliminar_persona", { rut }, () => {
+      log("Trabajador eliminado", `${nombreLargo(rut)}`);
+      DB.cuentas = DB.cuentas.filter(x => x.rut !== rut);   // su cuenta muere con él
+      DB.personas = DB.personas.filter(p => p.rut !== rut);
+    });
+    if (ok){ cerrar(); refrescar(v); }
   };
 }
 
@@ -3903,10 +3916,11 @@ function panelInstalaciones(perm, v){
     bind(){
       if (perm.crear) $("nuevaI").onclick = () => formInstalacion(null, v);
       [...document.querySelectorAll("[data-ei]")].forEach(b => b.onclick = () => formInstalacion(b.dataset.ei, v));
-      [...document.querySelectorAll("[data-di]")].forEach(b => b.onclick = () => {
+      [...document.querySelectorAll("[data-di]")].forEach(b => b.onclick = async () => {
         const n = DB.personas.filter(p => p.instalacionId === b.dataset.di).length;
         if (n) return bloqueo(`Hay ${n} persona${n===1?"":"s"} asignada${n===1?"":"s"}`, "Reasígnalas a otra instalación primero.");
-        DB.instalaciones = DB.instalaciones.filter(i => i.id !== b.dataset.di); refrescar(v);
+        const ok = await conRed("quitar_instalacion", { id:b.dataset.di }, () => { DB.instalaciones = DB.instalaciones.filter(i => i.id !== b.dataset.di); });
+        if (ok) refrescar(v);
       });
     }
   };
@@ -3924,10 +3938,13 @@ function formInstalacion(id, v){
     </div><div id="fErr"></div>
     <div class="actions"><button id="g" class="btn-primary">Guardar</button><button id="x" class="btn-ghost">Cancelar</button></div>`);
   $("x").onclick = cerrar;
-  $("g").onclick = () => {
+  $("g").onclick = async () => {
     if (!$("i_n").value.trim()) return $("fErr").innerHTML = `<div class="note err"><strong>${ic("x")}El nombre es obligatorio.</strong></div>`;
     const d = { nombre:$("i_n").value.trim(), comuna:$("i_c").value.trim(), servicioContinuo:$("i_sc").checked, zonaAustral:$("i_za").checked };
-    if (i) sellar(Object.assign(i, d)); else DB.instalaciones.push(sellar({ id:"I"+(Date.now()%100000), ...d }));
+    const ok = await conRed("guardar_instalacion", i ? { id:i.id, ...d } : d, () => {
+      if (i) sellar(Object.assign(i, d)); else DB.instalaciones.push(sellar({ id:"I"+(Date.now()%100000), ...d }));
+    });
+    if (!ok) return;
     cerrar(); refrescar(v);
   };
 }
@@ -3948,14 +3965,17 @@ function panelFeriados(perm, v){
     bind(){
       if (!perm.feriados) return;
       $("nuevoF").onclick = () => formulario("Agregar feriado nacional",
-        [["fecha","Fecha","date",""],["nombre","Nombre del feriado","text",""]], d => {
+        [["fecha","Fecha","date",""],["nombre","Nombre del feriado","text",""]], async d => {
           if (!d.fecha || !d.nombre.trim() || DB.feriados.some(f=>f.fecha===d.fecha)) return;
-          DB.feriados.push(sellar({ fecha:d.fecha, nombre:d.nombre.trim(), irrenunciable:false }));
-          log("Feriado agregado", `${d.fecha} · ${d.nombre.trim()}`);
-          cerrar(); refrescar(v);
+          const ok = await conRed("guardar_feriado", { fecha:d.fecha, nombre:d.nombre.trim(), irrenunciable:false }, () => {
+            DB.feriados.push(sellar({ fecha:d.fecha, nombre:d.nombre.trim(), irrenunciable:false }));
+            log("Feriado agregado", `${d.fecha} · ${d.nombre.trim()}`);
+          });
+          if (ok){ cerrar(); refrescar(v); }
         });
-      [...document.querySelectorAll("[data-df]")].forEach(b => b.onclick = () => {
-        DB.feriados = DB.feriados.filter(f => f.fecha !== b.dataset.df); refrescar(v);
+      [...document.querySelectorAll("[data-df]")].forEach(b => b.onclick = async () => {
+        const ok = await conRed("quitar_feriado", { fecha:b.dataset.df }, () => { DB.feriados = DB.feriados.filter(f => f.fecha !== b.dataset.df); });
+        if (ok) refrescar(v);
       });
     }
   };
