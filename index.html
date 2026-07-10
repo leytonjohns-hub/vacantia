@@ -1676,6 +1676,7 @@ const sistemaVacio = () => CONFIG.modo === "remoto" ? SISTEMA_INSTALADO === fals
 
 function montarIngreso(){
   if (sistemaVacio()) return montarAsistente();
+  ligarIngreso();                     // el marcado pudo rehacerse: hay que volver a escuchar
   const lista = $("demoList");
   if (!lista) return;
   if (CONFIG.modo === "remoto"){ lista.closest(".demo").hidden = true; return; }
@@ -1687,7 +1688,14 @@ function montarIngreso(){
   [...lista.querySelectorAll("button")].forEach(b => b.onclick = () => entrar(b.dataset.mail));
 }
 
-$("lGo").onclick = () => entrar();
+/* Reasignar innerHTML no restaura los nodos: los destruye y crea otros con el
+   mismo aspecto. Los botones que ve el usuario no son los que escucharon.
+   Por eso los eventos se ligan en una función, y se vuelve a llamar cada vez
+   que se rehace el marcado del ingreso.                                     */
+function ligarIngreso(){
+  if ($("lGo")) $("lGo").onclick = () => entrar();
+  if ($("lPub")) $("lPub").onclick = accesoPublico;
+}
 
 /* La identidad la verifica Google. VACANTIA nunca ve ni guarda una contraseña:
    solo resuelve qué perfiles tiene ese correo. Menos código, menos riesgo, y
@@ -1760,12 +1768,12 @@ function elegirCuentaDemo(){
   [...document.querySelectorAll("[data-m]")].forEach(b => b.onclick = () => { cerrar(); entrar(b.dataset.m); });
 }
 
-$("lPub").onclick = () => {
+function accesoPublico(){
   if (sistemaVacio()) return avisoRed("El sistema aún no está configurado. Completa la primera puesta en marcha.");
   SESION = null; SESION_REAL = null; SOLO_LECTURA = false;
   $("login").hidden = true; $("app").hidden = false;
   montarApp();
-};
+}
 
 function salir(){
   ID_TOKEN = null;
