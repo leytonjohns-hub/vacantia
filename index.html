@@ -13,6 +13,24 @@
   transformación total o parcial de esta obra sin autorización expresa
   y por escrito de su autor.
 
+  VERSIÓN 1.5 — La cuenta se separa de la persona.
+
+  PERSONA ≠ CUENTA
+  ----------------
+  Una PERSONA pertenece a la dotación: tiene cargo, jefe directo, fecha de
+  ingreso, saldo y feriado. Una CUENTA entra al sistema: tiene una identidad
+  de Google y unos perfiles.
+
+  A veces coinciden —Jenifer de RRHH es ambas cosas—. A veces no: el
+  administrador del sistema puede ser un consultor externo que administra
+  tres empresas distintas y no trabaja en ninguna. Antes lo obligábamos a
+  ocupar un cargo del organigrama, y como el único cargo disponible al
+  instalar era el raíz, terminaba figurando como gerente general.
+
+  Una cuenta sin persona es una CUENTA TÉCNICA: entra, administra, y no
+  aparece en ningún organigrama, no devenga feriado, no pide vacaciones,
+  no valida nada.
+
   VERSIÓN 1.4 — Conectado al backend.
 
   La identidad la emite Google Identity Services en el navegador: un id_token
@@ -682,7 +700,8 @@ a{color:var(--primary)}
      <a href="https://linkedin.com/in/luis-leyton-johns">LinkedIn</a> ·
      ORCID <a href="https://orcid.org/0000-0002-4462-403X">0000-0002-4462-403X</a>.
      Prohibida la reproducción, distribución o transformación total o parcial sin autorización expresa y por escrito del autor.</p>
-  <p style="margin-top:10px"><b>VACANTIA v1.4 — Conectado al backend.</b> La identidad la emite Google Identity Services: un <code>id_token</code> firmado que viaja en cada petición y que el servidor verifica contra Google. El navegador no afirma quién es; presenta una credencial que otro firmó. En modo remoto la base no se carga hasta que alguien acredita identidad, y el formulario público solo recibe los datos de la persona del enlace.</p>
+  <p style="margin-top:10px"><b>VACANTIA v1.5 — La cuenta se separa de la persona.</b> Una <b>persona</b> pertenece a la dotación: tiene cargo, jefe directo y feriado. Una <b>cuenta</b> entra al sistema. El administrador puede ser un consultor externo que no trabaja en la empresa: su cuenta no lleva persona, no figura en el organigrama y no pide vacaciones. Recursos Humanos, en cambio, debe ser una persona: quien registra un feriado firma su comprobante.</p>
+  <p style="margin-top:10px"><b>v1.4 — Conectado al backend.</b> La identidad la emite Google Identity Services: un <code>id_token</code> firmado que viaja en cada petición y que el servidor verifica contra Google. El navegador no afirma quién es; presenta una credencial que otro firmó. En modo remoto la base no se carga hasta que alguien acredita identidad, y el formulario público solo recibe los datos de la persona del enlace.</p>
   <p style="margin-top:10px"><b>v1.3 — Identidad y notificación, separadas.</b> La <b>cuenta Google</b> identifica a quien entra; el <b>correo de notificaciones</b> recibe los avisos. Un trabajador no necesita cuenta Google, solo un correo donde reciba su enlace. Sin dominio corporativo, la lista blanca de cuentas es la única defensa, y revocar el acceso de quien se va es una tarea manual que el sistema recuerda.</p>
   <p style="margin-top:10px"><b>v1.2 — Sistema vacío.</b> Arranca sin datos: el asistente de primera puesta en marcha crea la empresa, el cargo raíz, la primera instalación y la cuenta de administrador. Sin dominio corporativo, la lista blanca de correos es la única defensa: solo entra quien un administrador registró. Para ver la empresa de ejemplo, pon <code>CONFIG.datosDemo</code> en <code>true</code>.</p>
   <p style="margin-top:10px"><b>v1.1.</b> Autenticación con cuenta Google: el sistema no guarda contraseñas. Motor de reglas aislado y verificado con 79 pruebas automatizadas. El permiso sin goce y la licencia médica no suspenden el devengo; la licencia durante el feriado sí lo suspende y devuelve los días con un asiento contrario. El feriado progresivo se abona solo si el trabajador lo gestiona, pero el sistema calcula e informa siempre los días que corresponden. Toda escritura pasa por <code>API.guardar()</code>. Para conectar el backend basta cambiar <code>CONFIG.modo</code> a <code>"remoto"</code> y pegar la URL del despliegue de Apps Script: ninguna pantalla cambia. Mientras siga en <code>"local"</code>, nada se guarda ni se envía.</p>
@@ -750,6 +769,8 @@ const DB = {
             licenciaHasta:"", logo:null, plan:"", dotacionMaxima:0, zonaHoraria:"America/Santiago",
             contactoAdministrativo:"", permiteAnticipo:false, dominioGoogle:"" },
   cargos:[], instalaciones:[], personas:[], feriados:[],
+  // Quién entra al sistema. Puede o no corresponder a alguien de la dotación.
+  cuentas:[],
   solicitudes:[], licencias:[], enlaces:[], auditoria:[]
 };
 
@@ -776,12 +797,17 @@ const FERIADOS_SUGERIDOS = [
     {fecha:"2027-01-01", nombre:"Año Nuevo", irrenunciable:true}
 ];
 
-let SESION = null;        // identidad EFECTIVA: con la que se pinta el sistema
-let SESION_REAL = null;   // identidad AUTENTICADA: la que responde ante la auditoría
+/* SESION y SESION_REAL son CUENTAS, no personas. Una cuenta puede no tener
+   persona detrás: el administrador del sistema suele ser un consultor externo
+   que no pertenece a la dotación de ninguno de sus clientes.               */
+let SESION = null;        // cuenta EFECTIVA: con la que se pinta el sistema
+let SESION_REAL = null;   // cuenta AUTENTICADA: la que responde ante la auditoría
 let SOLO_LECTURA = false; // la suplantación no escribe, salvo que se autorice expresamente
 
-const suplantando = () => !!(SESION_REAL && SESION && SESION_REAL.rut !== SESION.rut);
+const suplantando = () => !!(SESION_REAL && SESION && SESION_REAL.cuentaGoogle !== SESION.cuentaGoogle);
 const actorReal = () => SESION_REAL || SESION;
+// La persona detrás de la sesión, si la hay. Null en una cuenta técnica.
+const personaSesion = () => (SESION && SESION.rut) ? P(SESION.rut) : null;
 
 /* ============================================================================
    CONFIGURACIÓN — el único lugar que cambia al conectar el backend
@@ -839,7 +865,7 @@ const API = {
         id_token: ID_TOKEN,                          // la identidad, firmada por Google
         // El servidor verifica que quien suplanta sea administrador. Decirlo aquí
         // no otorga nada: solo declara la intención.
-        suplantando: suplantando() ? SESION.rut : null,
+        suplantando: suplantando() ? SESION.cuentaGoogle : null,
         soloLectura: SOLO_LECTURA
       })
     }));
@@ -868,7 +894,7 @@ const API = {
 async function conRed(accion, datos, cambioLocal){
   // Un solo lugar para detener toda escritura durante una suplantación de solo lectura.
   if (suplantando() && SOLO_LECTURA){
-    avisoRed(`Estás viendo el sistema como ${nombre(SESION.rut)}, en modo de solo lectura. Ninguna acción se guardará.`);
+    avisoRed(`Estás viendo el sistema como ${nombreCuenta(SESION)}, en modo de solo lectura. Ninguna acción se guardará.`);
     return false;
   }
   ocupado(true);
@@ -943,9 +969,9 @@ const horaAhora = () => new Date().toLocaleTimeString("es-CL",{hour:"2-digit",mi
 
 function sello(){
   const a = actorReal();
-  return { por: a ? nombreLargo(a.rut) : "Sistema",
-           rut: a ? a.rut : null,
-           suplantando: suplantando() ? nombreLargo(SESION.rut) : null,
+  return { por: a ? nombreCuenta(a) : "Sistema",
+           rut: a ? (a.rut || null) : null,
+           suplantando: suplantando() ? nombreCuenta(SESION) : null,
            fecha: iso(new Date()), hora: horaAhora() };
 }
 
@@ -1033,48 +1059,88 @@ function disponibleDesde(rut, guard = 0){
 const ROLES = ["supervisor","gerencia","rrhh","admin"];
 const ROL_NOMBRE = { supervisor:"Supervisor", gerencia:"Gerencia", rrhh:"Recursos Humanos", admin:"Administrador" };
 
-const tieneAcceso = p => !!(p && p.acceso && p.acceso.activo);
+/* ---------- Cuentas ----------
+   Una CUENTA entra al sistema. Una PERSONA pertenece a la dotación.
+   Cuando `rut` está vacío, es una cuenta técnica: entra y administra, pero
+   no figura en el organigrama, no devenga feriado y no valida a nadie.     */
+
+const CUENTA = mail =>
+  DB.cuentas.find(c => c.cuentaGoogle.toLowerCase() === String(mail||"").toLowerCase()) || null;
+const cuentaDe = rut => DB.cuentas.find(c => c.rut === rut && c.activa) || null;
+const cuentasActivas = () => DB.cuentas.filter(c => c.activa);
+const cuentaTecnica = c => !!c && !c.rut;
+
+// Nombre para mostrar: el de la persona si la tiene, o el que se le puso a la cuenta.
+const nombreCuenta = c => c.rut ? nombreLargo(c.rut) : (c.nombre || c.cuentaGoogle);
+
+const tieneAcceso = p => !!(p && cuentaDe(p.rut));
+const rolesDe = rut => { const c = cuentaDe(rut); return c ? c.roles : []; };
 
 /* Identidad ≠ notificación.
-   cuentaGoogle contesta «¿quién eres?»: solo la tienen quienes entran.
-   email contesta «¿dónde te escribo?»: la tiene todo el mundo.
-   Si alguien no tiene correo corporativo, se le escribe a su cuenta Google;
-   pero para un trabajador sin cuenta, el correo es obligatorio o no hay enlace. */
-const correoNotificacion = p => (p && (p.email || p.cuentaGoogle)) || null;
-const porCuentaGoogle = mail =>
-  DB.personas.find(p => (p.cuentaGoogle||"").toLowerCase() === String(mail||"").toLowerCase()) || null;
-const conAcceso   = () => DB.personas.filter(tieneAcceso);
-const conRol      = r => DB.personas.filter(p => tieneAcceso(p) && p.roles.includes(r));
+   La cuenta Google contesta «¿quién eres?». El correo contesta «¿dónde te
+   escribo?». Un trabajador no tiene lo primero y sí lo segundo: sin correo
+   no hay enlace, y crearEnlace() lo rechaza.                                */
+const correoNotificacion = p => {
+  if (!p) return null;
+  if (p.email) return p.email;
+  const c = cuentaDe(p.rut);
+  return c ? c.cuentaGoogle : null;
+};
+const conRol = r => cuentasActivas().filter(c => c.roles.includes(r));
 
-// La cadena necesita UN titular de Recursos Humanos. Si hay varios, manda el primero con acceso.
-const personaRRHH = () => conRol("rrhh")[0] || null;
+/* La cadena necesita UN titular de Recursos Humanos, y tiene que ser una
+   PERSONA: quien registra un feriado firma un comprobante. Una cuenta técnica
+   no puede firmar por nadie. */
+const personaRRHH = () => {
+  const c = conRol("rrhh").find(x => x.rut);
+  return c ? P(c.rut) : null;
+};
 
 /* Quien aparece en una cadena de aprobación y no tiene cuenta, traba el flujo.
    La cadena se arma con el organigrama; los permisos no la conocen.        */
 function validadoresSinAcceso(){
   const necesarios = new Set();
   DB.personas.forEach(p => cadenaDe(p.rut).forEach(c => necesarios.add(c.rut)));
-  return [...necesarios].map(P).filter(p => p && !tieneAcceso(p));
+  return [...necesarios].map(P).filter(p => p && !cuentaDe(p.rut));
 }
 
 function problemasAccesos(){
   const out = [];
-  // Una cuenta activa sin identidad es una puerta que no se puede abrir.
-  conAcceso().filter(p => !p.cuentaGoogle).forEach(p =>
-    out.push(`${nombreLargo(p.rut)} tiene acceso activo pero no tiene cuenta Google: no podrá entrar.`));
-  // Dos personas con la misma identidad es una puerta que abre a dos.
+
+  // Una identidad no puede abrir dos puertas.
   const vistos = {};
-  conAcceso().forEach(p => {
-    const g = (p.cuentaGoogle||"").toLowerCase();
-    if (!g) return;
-    if (vistos[g]) out.push(`La cuenta ${g} está asignada a ${nombreLargo(vistos[g])} y a ${nombreLargo(p.rut)}.`);
-    else vistos[g] = p.rut;
+  cuentasActivas().forEach(c => {
+    const g = c.cuentaGoogle.toLowerCase();
+    if (vistos[g]) out.push(`La cuenta ${g} identifica a ${nombreCuenta(vistos[g])} y a ${nombreCuenta(c)}.`);
+    else vistos[g] = c;
   });
+
+  // Una persona no puede tener dos cuentas.
+  const porPersona = {};
+  cuentasActivas().filter(c => c.rut).forEach(c => {
+    if (porPersona[c.rut]) out.push(`${nombreLargo(c.rut)} tiene dos cuentas activas.`);
+    else porPersona[c.rut] = c;
+  });
+
   const admins = conRol("admin");
   if (!admins.length) out.push("No hay ningún administrador con acceso activo. Nadie podría volver a otorgar permisos.");
+
   const rrhhs = conRol("rrhh");
-  if (!rrhhs.length) out.push("No hay Recursos Humanos con acceso activo: ninguna solicitud podría cerrarse.");
-  if (rrhhs.length > 1) out.push(`Hay ${rrhhs.length} cuentas con perfil de Recursos Humanos. La cadena de aprobación usará la de ${nombreLargo(rrhhs[0].rut)}.`);
+  const rrhhPersonas = rrhhs.filter(c => c.rut);
+  if (!rrhhs.length)
+    out.push("No hay Recursos Humanos con acceso activo: ninguna solicitud podría cerrarse.");
+  else if (!rrhhPersonas.length)
+    out.push("La única cuenta de Recursos Humanos es técnica, sin persona en la dotación. Quien registra un feriado firma su comprobante: debe ser alguien de la empresa.");
+  if (rrhhPersonas.length > 1)
+    out.push(`Hay ${rrhhPersonas.length} cuentas de Recursos Humanos con persona. La cadena de aprobación usará la de ${nombreLargo(rrhhPersonas[0].rut)}.`);
+
+  // Una cuenta técnica no puede validar ni supervisar: no está en el organigrama.
+  cuentasActivas().filter(cuentaTecnica).forEach(c => {
+    const impropios = c.roles.filter(r => r === "supervisor" || r === "gerencia");
+    if (impropios.length)
+      out.push(`La cuenta técnica ${c.cuentaGoogle} tiene perfil de ${impropios.map(r=>ROL_NOMBRE[r]).join(" y ")}, pero no está en el organigrama: nunca le llegará nada que aprobar.`);
+  });
+
   validadoresSinAcceso().forEach(p =>
     out.push(`${nombreLargo(p.rut)} (${cargoNom(p.cargoId)}) debe validar solicitudes y no tiene cuenta: su equipo quedará trabado.`));
   return out;
@@ -1456,98 +1522,107 @@ function sembrarEmpresaDemo(){
     {id:"I3", nombre:"Faena Punta Arenas",   comuna:"Punta Arenas", servicioContinuo:true,  zonaAustral:true}
   );
   DB.personas.push(
-    {rut:"10111222-5", cuentaGoogle:"elena.vicuna.im@gmail.com", n1:"Elena", n2:"", a1:"Vicuña", a2:"Mackenna", nacimiento:"1968-08-14",
+    {rut:"10111222-5", n1:"Elena", n2:"", a1:"Vicuña", a2:"Mackenna", nacimiento:"1968-08-14",
      ingreso:"2001-04-02", reconocidos:0, reconocidosRespaldo:"", progresivo:{activo:false, fecha:null, respaldo:""}, instalacionId:"I1", supervisorRut:null, cargoId:"C0",
      contrato:"Indefinido", email:"e.vicuna@maipo.cl", fono:"+56 9 9999 0000",
-     roles:["gerencia"], acceso:{activo:true, debeCambiar:false, ultimoIngreso:null}, aperturaDias:22, aperturaFecha:"2026-01-01",
+     aperturaDias:22, aperturaFecha:"2026-01-01",
      aperturaRespaldo:"Planilla de remuneraciones, cierre 2025", tramoLargoMigrado:false, ajustes:[]},
 
-    {rut:"11223344-k", cuentaGoogle:"isidora.balmaceda.im@gmail.com", n1:"Isidora", n2:"", a1:"Balmaceda", a2:"Errázuriz", nacimiento:"1974-04-02",
+    {rut:"11223344-k", n1:"Isidora", n2:"", a1:"Balmaceda", a2:"Errázuriz", nacimiento:"1974-04-02",
      ingreso:"2005-03-01", reconocidos:0, reconocidosRespaldo:"", progresivo:{activo:false, fecha:null, respaldo:""}, instalacionId:"I1", supervisorRut:"10111222-5", cargoId:"C1",
      contrato:"Indefinido", email:"i.balmaceda@maipo.cl", fono:"+56 9 8888 1111",
-     roles:["gerencia"], acceso:{activo:true, debeCambiar:false, ultimoIngreso:null}, aperturaDias:40, aperturaFecha:"2026-01-01",
+     aperturaDias:40, aperturaFecha:"2026-01-01",
      aperturaRespaldo:"Planilla de remuneraciones, cierre 2025", tramoLargoMigrado:false, ajustes:[]},
 
-    {rut:"9876543-3", cuentaGoogle:"alejandra.carreno.im@gmail.com", n1:"Alejandra", n2:"", a1:"Carreño", a2:"Ríos", nacimiento:"1977-06-21",
+    {rut:"9876543-3", n1:"Alejandra", n2:"", a1:"Carreño", a2:"Ríos", nacimiento:"1977-06-21",
      ingreso:"2010-09-06", reconocidos:0, reconocidosRespaldo:"", progresivo:{activo:false, fecha:null, respaldo:""}, instalacionId:"I1", supervisorRut:"10111222-5", cargoId:"C10",
      contrato:"Indefinido", email:"a.carreno@maipo.cl", fono:"+56 9 8888 0022",
-     roles:["gerencia"], acceso:{activo:true, debeCambiar:false, ultimoIngreso:null}, aperturaDias:11, aperturaFecha:"2026-01-01",
+     aperturaDias:11, aperturaFecha:"2026-01-01",
      aperturaRespaldo:"Planilla de remuneraciones, cierre 2025", tramoLargoMigrado:false, ajustes:[]},
 
-    {rut:"13246578-9", cuentaGoogle:"tomas.undurraga.im@gmail.com", n1:"Tomás", n2:"", a1:"Undurraga", a2:"Lira", nacimiento:"1981-03-30",
+    {rut:"13246578-9", n1:"Tomás", n2:"", a1:"Undurraga", a2:"Lira", nacimiento:"1981-03-30",
      ingreso:"2014-02-17", reconocidos:0, reconocidosRespaldo:"", progresivo:{activo:false, fecha:null, respaldo:""}, instalacionId:"I1", supervisorRut:"10111222-5", cargoId:"C11",
      contrato:"Indefinido", email:"t.undurraga@maipo.cl", fono:"+56 9 8888 0033",
-     roles:["gerencia"], acceso:{activo:true, debeCambiar:false, ultimoIngreso:null}, aperturaDias:7, aperturaFecha:"2026-01-01",
+     aperturaDias:7, aperturaFecha:"2026-01-01",
      aperturaRespaldo:"Planilla de remuneraciones, cierre 2025", tramoLargoMigrado:false, ajustes:[]},
 
-    {rut:"22334455-0", cuentaGoogle:"jenifer.salas.im@gmail.com", n1:"Jenifer", n2:"", a1:"Salas", a2:"Mora", nacimiento:"1985-11-19",
+    {rut:"22334455-0", n1:"Jenifer", n2:"", a1:"Salas", a2:"Mora", nacimiento:"1985-11-19",
      ingreso:"2016-01-11", reconocidos:0, reconocidosRespaldo:"", progresivo:{activo:false, fecha:null, respaldo:""}, instalacionId:"I1", supervisorRut:"9876543-3", cargoId:"C2",
      contrato:"Indefinido", email:"j.salas@maipo.cl", fono:"+56 9 8888 2222",
-     roles:["rrhh"], acceso:{activo:true, debeCambiar:false, ultimoIngreso:null}, aperturaDias:6, aperturaFecha:"2026-01-01",
+     aperturaDias:6, aperturaFecha:"2026-01-01",
      aperturaRespaldo:"Planilla de remuneraciones, cierre 2025", tramoLargoMigrado:false, ajustes:[]},
 
-    {rut:"13579246-2", cuentaGoogle:"rodrigo.pena.im@gmail.com", n1:"Rodrigo", n2:"", a1:"Peña", a2:"Cárdenas", nacimiento:"1980-06-30",
+    {rut:"13579246-2", n1:"Rodrigo", n2:"", a1:"Peña", a2:"Cárdenas", nacimiento:"1980-06-30",
      ingreso:"2013-04-15", reconocidos:0, reconocidosRespaldo:"", progresivo:{activo:true, fecha:"2024-05-02", respaldo:"Solicitud firmada, expediente RRHH 2024-087"}, instalacionId:"I2", supervisorRut:"11223344-k", cargoId:"C3",
      contrato:"Indefinido", email:"r.pena@maipo.cl", fono:"+56 9 8888 3333",
-     roles:["supervisor"], acceso:{activo:true, debeCambiar:false, ultimoIngreso:null}, aperturaDias:4, aperturaFecha:"2026-01-01",
+     aperturaDias:4, aperturaFecha:"2026-01-01",
      aperturaRespaldo:"Planilla de remuneraciones, cierre 2025", tramoLargoMigrado:false, ajustes:[]},
 
-    {rut:"19283746-4", cuentaGoogle:"ingrid.barria.im@gmail.com", n1:"Ingrid", n2:"", a1:"Barría", a2:"Soto", nacimiento:"1983-02-08",
+    {rut:"19283746-4", n1:"Ingrid", n2:"", a1:"Barría", a2:"Soto", nacimiento:"1983-02-08",
      ingreso:"2017-08-01", reconocidos:0, reconocidosRespaldo:"", progresivo:{activo:false, fecha:null, respaldo:""}, instalacionId:"I3", supervisorRut:"11223344-k", cargoId:"C4",
      contrato:"Indefinido", email:"i.barria@maipo.cl", fono:"+56 9 8888 4444",
-     roles:["supervisor"], acceso:{activo:true, debeCambiar:false, ultimoIngreso:null}, aperturaDias:9, aperturaFecha:"2026-01-01",
+     aperturaDias:9, aperturaFecha:"2026-01-01",
      aperturaRespaldo:"Planilla de remuneraciones, cierre 2025", tramoLargoMigrado:false, ajustes:[]},
 
     {rut:"15847293-7", n1:"Camila", n2:"Andrea", a1:"Rojas", a2:"Vergara", nacimiento:"1988-09-12",
      ingreso:"2012-03-05", reconocidos:2, reconocidosRespaldo:"Certificado de Constructora Andes, marzo 2012", progresivo:{activo:true, fecha:"2026-02-10", respaldo:"Solicitud firmada, expediente RRHH 2026-014"}, instalacionId:"I2", supervisorRut:"13579246-2", cargoId:"C5",
      contrato:"Indefinido", email:"c.rojas@maipo.cl", fono:"+56 9 7777 1111",
-     cuentaGoogle:null, roles:[], acceso:{activo:false, ultimoIngreso:null}, aperturaDias:13, aperturaFecha:"2026-01-01",
+     aperturaDias:13, aperturaFecha:"2026-01-01",
      aperturaRespaldo:"Planilla de remuneraciones, cierre 2025", tramoLargoMigrado:false, ajustes:[]},
 
-    {rut:"12456789-0", cuentaGoogle:"marco.silva.im@gmail.com", n1:"Marco", n2:"Antonio", a1:"Silva", a2:"Pinto", nacimiento:"1979-01-23",
+    {rut:"12456789-0", n1:"Marco", n2:"Antonio", a1:"Silva", a2:"Pinto", nacimiento:"1979-01-23",
      ingreso:"2008-07-14", reconocidos:0, reconocidosRespaldo:"", progresivo:{activo:false, fecha:null, respaldo:""}, instalacionId:"I1", supervisorRut:"9876543-3", cargoId:"C6",
      contrato:"Indefinido", email:"m.silva@maipo.cl", fono:"+56 9 7777 2222",
-     roles:["supervisor"], acceso:{activo:true, debeCambiar:false, ultimoIngreso:null}, aperturaDias:38, aperturaFecha:"2026-01-01",
+     aperturaDias:38, aperturaFecha:"2026-01-01",
      aperturaRespaldo:"Acta de conciliación de saldos, dic. 2025", tramoLargoMigrado:false,
      ajustes:[{dias:2, motivo:"Días no gozados 2024, autorizados por acta", autor:"Jenifer Salas", fecha:"2026-01-15"}]},
 
     {rut:"20134567-7", n1:"Javiera", n2:"Ignacia", a1:"Muñoz", a2:"Tapia", nacimiento:"2000-05-04",
      ingreso:"2025-11-02", reconocidos:0, reconocidosRespaldo:"", progresivo:{activo:false, fecha:null, respaldo:""}, instalacionId:"I1", supervisorRut:"13246578-9", cargoId:"C7",
      contrato:"Plazo fijo", email:"j.munoz@maipo.cl", fono:"+56 9 7777 3333",
-     cuentaGoogle:null, roles:[], acceso:{activo:false, ultimoIngreso:null}, aperturaDias:5, aperturaFecha:"2026-01-01",
+     aperturaDias:5, aperturaFecha:"2026-01-01",
      aperturaRespaldo:"Carga manual, sin respaldo documental", tramoLargoMigrado:false, ajustes:[]},
 
     {rut:"17654321-3", n1:"Nicolás", n2:"Eduardo", a1:"Fuentes", a2:"Aravena", nacimiento:"1990-12-01",
      ingreso:"2019-01-21", reconocidos:0, reconocidosRespaldo:"", progresivo:{activo:false, fecha:null, respaldo:""}, instalacionId:"I3", supervisorRut:"19283746-4", cargoId:"C8",
      contrato:"Indefinido", email:"n.fuentes@maipo.cl", fono:"+56 9 7777 4444",
-     cuentaGoogle:null, roles:[], acceso:{activo:false, ultimoIngreso:null}, aperturaDias:6, aperturaFecha:"2026-01-01",
+     aperturaDias:6, aperturaFecha:"2026-01-01",
      aperturaRespaldo:"Planilla de remuneraciones, cierre 2025", tramoLargoMigrado:true, ajustes:[]},
 
-    {rut:"16789012-1", cuentaGoogle:"paulina.cortes.im@gmail.com", n1:"Paulina", n2:"", a1:"Cortés", a2:"Lagos", nacimiento:"1992-07-27",
+    {rut:"16789012-1", n1:"Paulina", n2:"", a1:"Cortés", a2:"Lagos", nacimiento:"1992-07-27",
      ingreso:"2021-06-10", reconocidos:0, reconocidosRespaldo:"", progresivo:{activo:false, fecha:null, respaldo:""}, instalacionId:"I2", supervisorRut:"13579246-2", cargoId:"C9",
      contrato:"Indefinido", email:"p.cortes@maipo.cl", fono:"+56 9 7777 5555",
-     roles:["supervisor"], acceso:{activo:true, debeCambiar:false, ultimoIngreso:null}, aperturaDias:3, aperturaFecha:"2026-01-01",
+     aperturaDias:3, aperturaFecha:"2026-01-01",
      aperturaRespaldo:"Planilla de remuneraciones, cierre 2025", tramoLargoMigrado:true, ajustes:[]},
 
     {rut:"14332876-7", n1:"Andrés", n2:"Felipe", a1:"Vergara", a2:"Soto", nacimiento:"1986-03-17",
      ingreso:"2015-09-01", reconocidos:0, reconocidosRespaldo:"", progresivo:{activo:false, fecha:null, respaldo:""}, instalacionId:"I2", supervisorRut:"13579246-2", cargoId:"C5",
      contrato:"Indefinido", email:"a.vergara@maipo.cl", fono:"+56 9 7777 6666",
-     cuentaGoogle:null, roles:[], acceso:{activo:false, ultimoIngreso:null}, aperturaDias:16, aperturaFecha:"2026-01-01",
+     aperturaDias:16, aperturaFecha:"2026-01-01",
      aperturaRespaldo:"Planilla de remuneraciones, cierre 2025", tramoLargoMigrado:false, ajustes:[]},
 
     {rut:"18220145-6", n1:"Constanza", n2:"", a1:"Ibáñez", a2:"Rojas", nacimiento:"1994-10-05",
      ingreso:"2020-02-17", reconocidos:0, reconocidosRespaldo:"", progresivo:{activo:false, fecha:null, respaldo:""}, instalacionId:"I1", supervisorRut:"13246578-9", cargoId:"C7",
      contrato:"Indefinido", email:"c.ibanez@maipo.cl", fono:"+56 9 7777 7777",
-     cuentaGoogle:null, roles:[], acceso:{activo:false, ultimoIngreso:null}, aperturaDias:2, aperturaFecha:"2026-01-01",
-     aperturaRespaldo:"Planilla de remuneraciones, cierre 2025", tramoLargoMigrado:false, ajustes:[]},
-
-    {rut:"8765432-k", cuentaGoogle:"admin.vacantia.im@gmail.com", n1:"Sistema", n2:"", a1:"Administrador", a2:"", nacimiento:"1980-01-01",
-     ingreso:"2026-01-01", reconocidos:0, reconocidosRespaldo:"", progresivo:{activo:false, fecha:null, respaldo:""}, instalacionId:"I1", supervisorRut:"9876543-3", cargoId:"C6",
-     contrato:"Indefinido", email:"admin@maipo.cl", fono:"",
-     roles:["admin"], acceso:{activo:true, debeCambiar:false, ultimoIngreso:null}, aperturaDias:0, aperturaFecha:"2026-01-01",
-     aperturaRespaldo:"Cuenta técnica, no genera feriado", tramoLargoMigrado:false, ajustes:[]}
+     aperturaDias:2, aperturaFecha:"2026-01-01",
+     aperturaRespaldo:"Planilla de remuneraciones, cierre 2025", tramoLargoMigrado:false, ajustes:[]}
   );
+  /* El administrador ya NO es una persona de la dotación: es una cuenta técnica.
+     Antes ocupaba un cargo inventado y devengaba feriado que nadie le iba a pagar. */
   DB.feriados.push(...FERIADOS_SUGERIDOS);
+  DB.cuentas.push(
+    { cuentaGoogle:"elena.vicuna.im@gmail.com", rut:"10111222-5", nombre:"", roles:["gerencia"], activa:true, ultimoIngreso:null, ultimaHora:null },
+    { cuentaGoogle:"isidora.balmaceda.im@gmail.com", rut:"11223344-k", nombre:"", roles:["gerencia"], activa:true, ultimoIngreso:null, ultimaHora:null },
+    { cuentaGoogle:"alejandra.carreno.im@gmail.com", rut:"9876543-3", nombre:"", roles:["gerencia"], activa:true, ultimoIngreso:null, ultimaHora:null },
+    { cuentaGoogle:"tomas.undurraga.im@gmail.com", rut:"13246578-9", nombre:"", roles:["gerencia"], activa:true, ultimoIngreso:null, ultimaHora:null },
+    { cuentaGoogle:"jenifer.salas.im@gmail.com", rut:"22334455-0", nombre:"", roles:["rrhh"], activa:true, ultimoIngreso:null, ultimaHora:null },
+    { cuentaGoogle:"rodrigo.pena.im@gmail.com", rut:"13579246-2", nombre:"", roles:["supervisor"], activa:true, ultimoIngreso:null, ultimaHora:null },
+    { cuentaGoogle:"ingrid.barria.im@gmail.com", rut:"19283746-4", nombre:"", roles:["supervisor"], activa:true, ultimoIngreso:null, ultimaHora:null },
+    { cuentaGoogle:"marco.silva.im@gmail.com", rut:"12456789-0", nombre:"", roles:["supervisor"], activa:true, ultimoIngreso:null, ultimaHora:null },
+    { cuentaGoogle:"paulina.cortes.im@gmail.com", rut:"16789012-1", nombre:"", roles:["supervisor"], activa:true, ultimoIngreso:null, ultimaHora:null },
+    // Cuenta técnica: administra el sistema y no pertenece a la dotación.
+    { cuentaGoogle:"admin.vacantia.im@gmail.com", rut:null, nombre:"Administración VACANTIA", roles:["admin"], activa:true, ultimoIngreso:null, ultimaHora:null }
+  );
 }
 
 /* ===================== Arranque ===================== */
@@ -1637,8 +1712,7 @@ function sembrarDotacionSintetica(n){
       rut, n1:nombres[i % nombres.length], n2:"", a1:apellidos[i % apellidos.length], a2:apellidos[(i*7+3) % apellidos.length],
       nacimiento: iso(new Date(1975 + (i % 25), (i*5) % 12, 1 + (i % 27))),
       ingreso: ing, reconocidos:0, reconocidosRespaldo:"", progresivo:{activo:false, fecha:null, respaldo:""}, instalacionId:q.inst, supervisorRut:q.jefe, cargoId:q.cargo,
-      contrato:"Indefinido", email:`t${cuerpo}@maipo.cl`, fono:"", clave:null, cuentaGoogle:null, roles:[], acceso:{activo:false, ultimoIngreso:null},
-      aperturaDias: Math.min(max, (i % 41)), aperturaFecha:"2026-01-01",
+      contrato:"Indefinido", email:`t${cuerpo}@maipo.cl`, fono:"", aperturaDias: Math.min(max, (i % 41)), aperturaFecha:"2026-01-01",
       aperturaRespaldo:"Planilla de remuneraciones, cierre 2025", tramoLargoMigrado:(i % 3 === 0), ajustes:[]
     });
   }
@@ -1680,10 +1754,12 @@ function montarIngreso(){
   const lista = $("demoList");
   if (!lista) return;
   if (CONFIG.modo === "remoto"){ lista.closest(".demo").hidden = true; return; }
-  lista.innerHTML = ["10111222-5","11223344-k","13579246-2","22334455-0","8765432-k"].map(r => {
-    const p = P(r);
-    return `<li><button data-mail="${p.cuentaGoogle}">${ic("users")}<span>${esc(nombreLargo(r))}</span>
-      <span class="r">${esc(p.roles.map(x => ROL_NOMBRE[x]).join(" · "))}</span></button></li>`;
+  lista.innerHTML = ["elena.vicuna.im@gmail.com","rodrigo.pena.im@gmail.com","jenifer.salas.im@gmail.com",
+                     "isidora.balmaceda.im@gmail.com","admin.vacantia.im@gmail.com"].map(g => {
+    const c = CUENTA(g);
+    if (!c) return "";
+    return `<li><button data-mail="${esc(g)}">${ic("users")}<span>${esc(nombreCuenta(c))}</span>
+      <span class="r">${esc(c.roles.map(x => ROL_NOMBRE[x]).join(" · "))}${cuentaTecnica(c)?" · técnica":""}</span></button></li>`;
   }).join("");
   [...lista.querySelectorAll("button")].forEach(b => b.onclick = () => entrar(b.dataset.mail));
 }
@@ -1710,21 +1786,17 @@ async function entrar(mail){
     try {
       await API.cargar();                             // la base llega con la identidad ya verificada
       const res = await API.guardar("autenticar", {});
-      SESION = P(res.rut); SESION_REAL = SESION; SOLO_LECTURA = false;
+      SESION = CUENTA(res.cuentaGoogle); SESION_REAL = SESION; SOLO_LECTURA = false;
     } catch (e){ ocupado(false); ID_TOKEN = null; return falla(esc(e.message)); }
     ocupado(false);
   } else {
     if (!mail) return elegirCuentaDemo();
-    // Se busca por cuentaGoogle, nunca por el correo de notificaciones.
-    const p = porCuentaGoogle(mail);
-    if (!p) return falla("Esa cuenta de Google no está registrada en el sistema. Sin dominio corporativo, la lista blanca es la única defensa: pide al administrador que te registre.");
-    if (!tieneAcceso(p))
-      return falla("Estás en la dotación pero no tienes acceso al sistema. Para pedir vacaciones usa el enlace que llega a tu correo.");
-    if (!p.roles.length)
-      return falla("Tu cuenta no tiene ningún perfil asignado. Pide al administrador que te lo otorgue.");
-    p.acceso.ultimoIngreso = iso(new Date());
-    p.acceso.ultimaHora = horaAhora();
-    SESION = p; SESION_REAL = p; SOLO_LECTURA = false;
+    const cta = CUENTA(mail);
+    if (!cta) return falla("Esa cuenta de Google no está registrada en el sistema. Sin dominio corporativo, la lista blanca es la única defensa: pide al administrador que te registre.");
+    if (!cta.activa) return falla("Tu acceso al sistema fue revocado. Para pedir vacaciones usa el enlace que llega a tu correo.");
+    if (!cta.roles.length) return falla("Tu cuenta no tiene ningún perfil asignado. Pide al administrador que te lo otorgue.");
+    cta.ultimoIngreso = iso(new Date()); cta.ultimaHora = horaAhora();
+    SESION = cta; SESION_REAL = cta; SOLO_LECTURA = false;
   }
 
   $("login").hidden = true; $("app").hidden = false;
@@ -1759,9 +1831,9 @@ function elegirCuentaDemo(){
   abrir(`<h2>Elige una cuenta</h2>
     <p style="color:var(--gray);margin-top:8px;font-size:14px">En producción esto es la pantalla de Google. Aquí simulamos el selector de cuentas del dominio <b>${esc(DB.empresa.dominioGoogle)}</b>.</p>
     <div style="display:grid;gap:9px;margin-top:20px">
-      ${conAcceso().filter(p => p.cuentaGoogle).map(p => `<button class="btn-ghost" data-m="${esc(p.cuentaGoogle)}" style="justify-content:flex-start;padding:12px 14px;text-align:left">
-        ${ic("users")}<span><b style="color:var(--text)">${esc(nombreLargo(p.rut))}</b><br>
-        <span style="font-size:12px;color:var(--gray)">${esc(p.cuentaGoogle)} · ${esc(p.roles.map(r=>ROL_NOMBRE[r]).join(", "))}</span></span></button>`).join("")}
+      ${cuentasActivas().map(c => `<button class="btn-ghost" data-m="${esc(c.cuentaGoogle)}" style="justify-content:flex-start;padding:12px 14px;text-align:left">
+        ${ic("users")}<span><b style="color:var(--text)">${esc(nombreCuenta(c))}</b>${cuentaTecnica(c)?` <span class="chip days">técnica</span>`:""}<br>
+        <span style="font-size:12px;color:var(--gray)">${esc(c.cuentaGoogle)} · ${esc(c.roles.map(r=>ROL_NOMBRE[r]).join(", "))}</span></span></button>`).join("")}
     </div>
     <div class="actions"><button id="c" class="btn-ghost">Cancelar</button></div>`);
   $("c").onclick = cerrar;
@@ -1778,7 +1850,7 @@ function accesoPublico(){
 function salir(){
   ID_TOKEN = null;
   if (window.google && google.accounts && google.accounts.id) google.accounts.id.disableAutoSelect();
-  if (suplantando()) log("Suplantación terminada", `${nombreLargo(SESION_REAL.rut)} cierra sesión mientras veía como ${nombreLargo(SESION.rut)}`);
+  if (suplantando()) log("Suplantación terminada", `${nombreCuenta(SESION_REAL)} cierra sesión mientras veía como ${nombreCuenta(SESION)}`);
   location.hash = ""; location.reload();
 }
 
@@ -1796,7 +1868,8 @@ const INSTALACION = {
              licenciaHasta:"", permiteAnticipo:false },
   cargo:   { nombre:"Gerencia General" },
   inst:    { nombre:"", comuna:"", servicioContinuo:false, zonaAustral:false },
-  admin:   { num:"", dv:"", n1:"", a1:"", a2:"", cuentaGoogle:"", email:"", ingreso:"", nacimiento:"" },
+  admin:   { tecnica:true, nombre:"", cuentaGoogle:"",
+             num:"", dv:"", n1:"", a1:"", a2:"", email:"", ingreso:"", nacimiento:"" },
   feriados: true
 };
 
@@ -1854,24 +1927,45 @@ function montarAsistente(){
 
     // 4. Administrador
     `<div class="note warn" style="margin-top:0"><strong>${ic("shield")}Esta cuenta podrá crear a todas las demás</strong>
-      La <b>cuenta de Google</b> es la identidad: es lo único que el sistema mira para dejar pasar. Como no hay dominio corporativo, la lista blanca es la única defensa. El <b>correo de notificaciones</b> es dónde llegan los avisos, y conviene que sea el de la empresa.</div>
+      La <b>cuenta de Google</b> es la identidad: es lo único que el sistema mira para dejar pasar. Como no hay dominio corporativo, la lista blanca es la única defensa.</div>
      <div class="fields">
-      <div class="trio">
-        <div><label>RUT (sin DV)</label><input id="s_num" type="text" maxlength="8" value="${esc(I.admin.num)}"></div>
-        <div><label>DV</label><input id="s_dv" type="text" maxlength="1" value="${esc(I.admin.dv)}"></div>
-        <div><label>Fecha de nacimiento</label><input id="s_nac" type="date" value="${I.admin.nacimiento}"></div>
+      <div><label>¿Quién administrará el sistema?</label>
+        <div style="display:grid;gap:9px;margin-top:4px">
+          <label style="font-weight:400;color:var(--text);font-size:13.5px;display:flex;align-items:flex-start;gap:9px">
+            <input type="radio" name="s_tipo" value="tecnica" ${I.admin.tecnica?"checked":""} style="width:auto;margin-top:3px">
+            <span><b style="font-weight:600">Alguien externo a la empresa</b><br>
+            <span style="color:var(--gray);font-size:12px">Un consultor, o quien implanta el sistema. <b>No aparece en el organigrama</b>, no devenga feriado y no valida a nadie. Es lo habitual.</span></span></label>
+          <label style="font-weight:400;color:var(--text);font-size:13.5px;display:flex;align-items:flex-start;gap:9px">
+            <input type="radio" name="s_tipo" value="persona" ${!I.admin.tecnica?"checked":""} style="width:auto;margin-top:3px">
+            <span><b style="font-weight:600">Alguien de la dotación</b><br>
+            <span style="color:var(--gray);font-size:12px">Trabaja en la empresa. Ocupará el cargo raíz que acabas de crear, con todo lo que eso significa: su feriado se cursa sin validación previa.</span></span></label>
+        </div></div>
+
+      <div id="s_tec">
+        <label>Nombre para mostrar</label>
+        <input id="s_nom" type="text" value="${esc(I.admin.nombre)}" placeholder="Ej.: Administración VACANTIA">
+        <p class="hint">Aparecerá en la auditoría y en el sello de cada registro que toque.</p>
       </div>
-      <div class="trio">
-        <div><label>Nombre</label><input id="s_n1" type="text" value="${esc(I.admin.n1)}"></div>
-        <div><label>Primer apellido</label><input id="s_a1" type="text" value="${esc(I.admin.a1)}"></div>
-        <div><label>Segundo apellido</label><input id="s_a2" type="text" value="${esc(I.admin.a2)}"></div>
+
+      <div id="s_per" hidden>
+        <div class="trio">
+          <div><label>RUT (sin DV)</label><input id="s_num" type="text" maxlength="8" value="${esc(I.admin.num)}"></div>
+          <div><label>DV</label><input id="s_dv" type="text" maxlength="1" value="${esc(I.admin.dv)}"></div>
+          <div><label>Fecha de nacimiento</label><input id="s_nac" type="date" value="${I.admin.nacimiento}"></div>
+        </div>
+        <div class="trio" style="margin-top:15px">
+          <div><label>Nombre</label><input id="s_n1" type="text" value="${esc(I.admin.n1)}"></div>
+          <div><label>Primer apellido</label><input id="s_a1" type="text" value="${esc(I.admin.a1)}"></div>
+          <div><label>Segundo apellido</label><input id="s_a2" type="text" value="${esc(I.admin.a2)}"></div>
+        </div>
+        <div class="pair" style="margin-top:15px">
+          <div><label>Correo para notificaciones</label><input id="s_corp" type="email" value="${esc(I.admin.email)}" placeholder="nombre@empresa.cl"></div>
+          <div><label>Fecha de ingreso a la empresa</label><input id="s_ing" type="date" value="${I.admin.ingreso}"></div>
+        </div>
       </div>
-      <div class="pair">
-        <div><label>Cuenta de Google — identidad</label><input id="s_gmail" type="email" value="${esc(I.admin.cuentaGoogle)}" placeholder="nombre@gmail.com"></div>
-        <div><label>Correo para notificaciones <span style="font-weight:400">(opcional)</span></label>
-          <input id="s_corp" type="email" value="${esc(I.admin.email)}" placeholder="nombre@empresa.cl"></div>
-      </div>
-      <div><label>Fecha de ingreso a la empresa</label><input id="s_ing" type="date" value="${I.admin.ingreso}"></div>
+
+      <div><label>Cuenta de Google — identidad</label>
+        <input id="s_gmail" type="email" value="${esc(I.admin.cuentaGoogle)}" placeholder="nombre@gmail.com"></div>
      </div>`
   ][p];
 
@@ -1889,6 +1983,14 @@ function montarAsistente(){
     </div>
   </section>`;
 
+  if (p === 3){
+    const alternar = () => {
+      const tec = document.querySelector('input[name="s_tipo"]:checked').value === "tecnica";
+      $("s_tec").hidden = !tec; $("s_per").hidden = tec;
+    };
+    [...document.querySelectorAll('input[name="s_tipo"]')].forEach(r => r.onchange = alternar);
+    alternar();
+  }
   if ($("sAtras")) $("sAtras").onclick = () => { guardarPaso(); I.paso--; montarAsistente(); };
   $("sNext").onclick = () => {
     guardarPaso();
@@ -1908,9 +2010,14 @@ function guardarPaso(){
   if (I.paso === 1) I.cargo.nombre = v("s_cargo");
   if (I.paso === 2) Object.assign(I.inst, { nombre:v("s_iname"), comuna:v("s_icom"),
     servicioContinuo:ck("s_isc"), zonaAustral:ck("s_iza") });
-  if (I.paso === 3) Object.assign(I.admin, { num:v("s_num"), dv:v("s_dv").toLowerCase(), n1:v("s_n1"),
-    a1:v("s_a1"), a2:v("s_a2"), cuentaGoogle:v("s_gmail").toLowerCase(), email:v("s_corp").toLowerCase(),
-    ingreso:v("s_ing"), nacimiento:v("s_nac") });
+  if (I.paso === 3){
+    const tec = document.querySelector('input[name="s_tipo"]:checked');
+    Object.assign(I.admin, {
+      tecnica: tec ? tec.value === "tecnica" : true,
+      nombre: v("s_nom"), cuentaGoogle: v("s_gmail").toLowerCase(),
+      num:v("s_num"), dv:v("s_dv").toLowerCase(), n1:v("s_n1"), a1:v("s_a1"), a2:v("s_a2"),
+      email:v("s_corp").toLowerCase(), ingreso:v("s_ing"), nacimiento:v("s_nac") });
+  }
 }
 
 function validarPaso(){
@@ -1924,37 +2031,47 @@ function validarPaso(){
   if (I.paso === 2 && !I.inst.nombre) return "La instalación es obligatoria: toda persona pertenece a una.";
   if (I.paso === 3){
     const a = I.admin;
-    if (!rutValido(`${a.num}-${a.dv}`)) return "El RUT no es válido. Revisa el dígito verificador.";
-    if (!a.n1 || !a.a1) return "El nombre y el primer apellido son obligatorios.";
     const formato = t => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(t);
     if (!formato(a.cuentaGoogle)) return "La cuenta de Google no es válida. Es la identidad con la que entrarás.";
-    if (a.email && !formato(a.email)) return "El correo de notificaciones no es válido.";
-    if (!a.ingreso) return "Sin fecha de ingreso el sistema no puede devengar el feriado.";
+    if (a.tecnica){
+      if (!a.nombre) return "Una cuenta técnica necesita un nombre para mostrar: aparecerá en la auditoría.";
+    } else {
+      if (!rutValido(`${a.num}-${a.dv}`)) return "El RUT no es válido. Revisa el dígito verificador.";
+      if (!a.n1 || !a.a1) return "El nombre y el primer apellido son obligatorios.";
+      if (a.email && !formato(a.email)) return "El correo de notificaciones no es válido.";
+      if (!a.ingreso) return "Sin fecha de ingreso el sistema no puede devengar el feriado.";
+    }
   }
   return null;
 }
 
 async function instalar(){
-  const I = INSTALACION, a = I.admin, rut = `${a.num}-${a.dv}`;
+  const I = INSTALACION, a = I.admin;
+  const rut = a.tecnica ? null : `${a.num}-${a.dv}`;
+  const quien = a.tecnica ? a.nombre : `${a.n1} ${a.a1}`;
+
   const ok = await conRed("instalar_empresa",
     { empresa:I.empresa, cargo:I.cargo, inst:I.inst, admin:a,
       feriados: I.feriados ? FERIADOS_SUGERIDOS : [] }, () => {
-    Object.assign(DB.empresa, I.empresa, { plan:"Inicial", dotacionMaxima:200, contacto:`${a.n1} ${a.a1}`,
-      contactoAdministrativo:`${a.n1} ${a.a1} · ${a.email || a.cuentaGoogle}` });
+    Object.assign(DB.empresa, I.empresa, { plan:"Inicial", dotacionMaxima:200, contacto:quien,
+      contactoAdministrativo:`${quien} · ${a.email || a.cuentaGoogle}` });
     DB.cargos.push({ id:"C1", nombre:I.cargo.nombre, dependeDe:null, familia:"Gerencia" });
     DB.instalaciones.push({ id:"I1", ...I.inst });
     if (I.feriados) DB.feriados.push(...FERIADOS_SUGERIDOS.map(f => ({...f})));
-    DB.personas.push({
+
+    // El cargo raíz solo se ocupa si el administrador pertenece a la empresa.
+    if (!a.tecnica) DB.personas.push({
       rut, n1:a.n1, n2:"", a1:a.a1, a2:a.a2, nacimiento:a.nacimiento, ingreso:a.ingreso,
       reconocidos:0, reconocidosRespaldo:"", progresivo:{activo:false, fecha:null, respaldo:""},
       instalacionId:"I1", supervisorRut:null, cargoId:"C1", contrato:"Indefinido",
-      cuentaGoogle:a.cuentaGoogle, email:a.email, fono:"", roles:["admin"],
-      acceso:{activo:true, ultimoIngreso:null},
-      aperturaDias:0, aperturaFecha:a.ingreso, aperturaRespaldo:"Cuenta creada en la instalación del sistema",
-      tramoLargoMigrado:false, ajustes:[]
+      email:a.email, fono:"", aperturaDias:0, aperturaFecha:a.ingreso,
+      aperturaRespaldo:"Creado en la instalación del sistema", tramoLargoMigrado:false, ajustes:[]
     });
-    SESION_REAL = P(rut);   // para que el sello del log tenga autor
-    log("Sistema instalado", `${I.empresa.nombre} · cargo raíz ${I.cargo.nombre} · administrador ${a.n1} ${a.a1} · identidad ${a.cuentaGoogle}`);
+
+    DB.cuentas.push({ cuentaGoogle:a.cuentaGoogle, rut, nombre: a.tecnica ? a.nombre : "",
+                      roles:["admin"], activa:true, ultimoIngreso:null, ultimaHora:null });
+    SESION_REAL = CUENTA(a.cuentaGoogle);   // para que el sello del log tenga autor
+    log("Sistema instalado", `${I.empresa.nombre} · cargo raíz ${I.cargo.nombre} · administrador ${quien} · identidad ${a.cuentaGoogle}${a.tecnica?" · cuenta técnica":""}`);
   });
   if (!ok) return;
 
@@ -1968,7 +2085,7 @@ async function instalar(){
       $("ok").onclick = () => { cerrar(); montarIngreso(); pedirCredencialGoogle(); };
   }
 
-  SESION = P(rut); SESION_REAL = SESION; SOLO_LECTURA = false;
+  SESION = CUENTA(a.cuentaGoogle); SESION_REAL = SESION; SOLO_LECTURA = false;
   pintarComarca();
   $("login").hidden = true; $("app").hidden = false;
   vistaActual = "A"; paneActivo.A = "organigrama";
@@ -1980,7 +2097,7 @@ async function instalar(){
       <div class="paso activo"><div class="dot">1</div><div class="txt"><b>Completa el organigrama</b>
         <small>Crea los cargos colgando de ${esc(I.cargo.nombre)}. La cadena de aprobación sale de ahí.</small></div></div>
       <div class="paso pend"><div class="dot">2</div><div class="txt"><b>Crea a las personas de oficina central</b>
-        <small>En Dotación, con su cargo, jefe directo y saldo de apertura.</small></div></div>
+        <small>En Dotación, con su cargo, jefe directo y saldo de apertura.${a.tecnica?` <b>El cargo raíz está vacante</b>: alguien de la empresa debe ocuparlo.`:""}</small></div></div>
       <div class="paso pend"><div class="dot">3</div><div class="txt"><b>Otórgales cuenta y perfiles</b>
         <small>En Usuarios. Necesitas al menos una cuenta de Recursos Humanos, o ninguna solicitud podrá cerrarse.</small></div></div>
       <div class="paso pend"><div class="dot">4</div><div class="txt"><b>Recursos Humanos carga la dotación</b>
@@ -1998,17 +2115,19 @@ let vistaActual = "W";
 
 function pestanas(){
   if (!SESION) return [["W","Solicitar vacaciones"]];
-  const t = [["W","Solicitar vacaciones"]];
+  const t = [];
+  // Una cuenta técnica no pide vacaciones: no está en la dotación.
+  if (SESION.rut) t.push(["W","Solicitar vacaciones"]);
   const r = SESION.roles;
   if (r.includes("supervisor")) t.push(["V","Aprobaciones"]);
   else if (r.includes("gerencia")) t.push(["V","Validaciones"]);
   if (r.includes("rrhh"))  t.push(["H","Recursos Humanos"]);
   if (r.includes("admin")) t.push(["A","Administración"]);
-  return t;
+  return t.length ? t : [["W","Solicitar vacaciones"]];
 }
 
 function pendientesMios(){
-  if (!SESION) return 0;
+  if (!SESION || !SESION.rut) return 0;
   return DB.solicitudes.filter(x => x.estado === "EN_CURSO" && pasoActual(x)
     && pasoActual(x).rut === SESION.rut && pasoActual(x).rol !== "rrhh").length;
 }
@@ -2020,14 +2139,15 @@ function pendientesMios(){
    ========================================================================= */
 
 function puedeSuplantar(){ return SESION_REAL && SESION_REAL.roles.includes("admin"); }
+const cuentaPorRut = rut => DB.cuentas.find(c => c.rut === rut && c.activa) || null;
 
 function abrirSuplantar(){
-  const candidatos = conAcceso().filter(p => p.rut !== SESION_REAL.rut);
+  const candidatos = cuentasActivas().filter(c => c.cuentaGoogle !== SESION_REAL.cuentaGoogle);
   abrir(`<h2>Ver el sistema como otra persona</h2>
     <p style="color:var(--gray);margin-top:8px;font-size:14px">Verás exactamente sus ambientes, su bandeja y sus alertas. Tu sesión sigue siendo la tuya.</p>
     <div class="fields">
-      <div><label>Persona</label><select id="sp_p">${candidatos.map(p =>
-        `<option value="${p.rut}">${esc(nombreLargo(p.rut))} — ${esc(p.roles.map(r=>ROL_NOMBRE[r]).join(", "))}</option>`).join("")}</select></div>
+      <div><label>Cuenta</label><select id="sp_p">${candidatos.map(c =>
+        `<option value="${esc(c.cuentaGoogle)}">${esc(nombreCuenta(c))} — ${esc(c.roles.map(r=>ROL_NOMBRE[r]).join(", "))}${cuentaTecnica(c)?" (técnica)":""}</option>`).join("")}</select></div>
       <div><label><input type="checkbox" id="sp_esc" style="width:auto;margin-right:8px">Permitir que ejecute acciones en su nombre</label>
         <p class="hint">Déjalo sin marcar salvo que sea imprescindible. Si lo marcas, cada acción quedará registrada como «ejecutada por ti suplantando a esa persona», pero el comprobante que reciba el trabajador llevará el nombre de ella, no el tuyo.</p></div>
     </div>
@@ -2037,16 +2157,16 @@ function abrirSuplantar(){
       <button id="c" class="btn-ghost">Cancelar</button></div>`);
   $("c").onclick = cerrar;
   $("ok").onclick = () => {
-    const destino = P($("sp_p").value);
+    const destino = CUENTA($("sp_p").value);
     SOLO_LECTURA = !$("sp_esc").checked;
-    log("Suplantación iniciada", `${nombreLargo(SESION_REAL.rut)} pasa a ver como ${nombreLargo(destino.rut)} · ${SOLO_LECTURA ? "solo lectura" : "CON PERMISO DE ACCIÓN"}`);
+    log("Suplantación iniciada", `${nombreCuenta(SESION_REAL)} pasa a ver como ${nombreCuenta(destino)} · ${SOLO_LECTURA ? "solo lectura" : "CON PERMISO DE ACCIÓN"}`);
     SESION = destino; vistaActual = null; actual = null;
     cerrar(); montarApp();
   };
 }
 
 function terminarSuplantacion(){
-  log("Suplantación terminada", `${nombreLargo(SESION_REAL.rut)} deja de ver como ${nombreLargo(SESION.rut)}`);
+  log("Suplantación terminada", `${nombreCuenta(SESION_REAL)} deja de ver como ${nombreCuenta(SESION)}`);
   SESION = SESION_REAL; SOLO_LECTURA = false; vistaActual = null; actual = null;
   montarApp();
 }
@@ -2056,7 +2176,7 @@ function pintarFranja(){
   if (!suplantando()){ f.hidden = true; return; }
   f.hidden = false;
   f.innerHTML = `${ic("shield")}
-    <span>Estás viendo el sistema como <b>${esc(nombreLargo(SESION.rut))}</b> · ${esc(SESION.roles.map(r=>ROL_NOMBRE[r]).join(", "))}</span>
+    <span>Estás viendo el sistema como <b>${esc(nombreCuenta(SESION))}</b> · ${esc(SESION.roles.map(r=>ROL_NOMBRE[r]).join(", "))}</span>
     <div class="modo">
       <span>${SOLO_LECTURA ? "Solo lectura: nada se guardará" : "Con permiso de acción: todo queda registrado a tu nombre"}</span>
       <button id="finSup">${ic("back")}Volver a mi cuenta</button>
@@ -2073,7 +2193,8 @@ function montarApp(){
   [...$("tabs").querySelectorAll("button")].forEach(b => b.onclick = () => { vistaActual = b.dataset.v; montarApp(); });
 
   $("usr").innerHTML = SESION
-    ? `<div><div class="nm">${esc(nombre(SESION.rut))}</div><div class="cg">${esc(cargoNom(SESION.cargoId))}</div></div>
+    ? `<div><div class="nm">${esc(nombreCuenta(SESION))}</div>
+         <div class="cg">${SESION.rut ? esc(cargoNom(P(SESION.rut).cargoId)) : "Cuenta técnica · no pertenece a la dotación"}</div></div>
        ${puedeSuplantar() && !suplantando() ? `<button id="sup">${ic("users")}Ver como…</button>` : ""}
        <button id="out">${ic("out")}Salir</button>`
     : `<div><div class="cg">Acceso público</div></div><button id="out">${ic("out")}Ir al ingreso</button>`;
@@ -2082,7 +2203,7 @@ function montarApp(){
 
   ["W","V","H","A"].forEach(k => $("view"+k).hidden = k !== vistaActual);
   // La sesión ya autenticó a la persona: no necesita enlace ni escribir su RUT.
-  if (vistaActual === "W" && SESION && !actual) abrirConSesion();
+  if (vistaActual === "W" && SESION && SESION.rut && !actual) abrirConSesion();
   if (vistaActual === "V") pintarBandeja();
   if (vistaActual === "H" || vistaActual === "A") pintarAmbiente(vistaActual);
 }
@@ -2185,7 +2306,7 @@ function abrirConEnlace(token){
 
 function abrirConSesion(){
   tokenActivo = null;
-  actual = SESION; s = saldo(actual);
+  actual = P(SESION.rut); s = saldo(actual);
   $("paneRut").hidden = true; $("paneEnviado").hidden = true;
   $("tit1").textContent = "Tus datos";
   $("avisoEnlace").innerHTML = "";
@@ -2345,8 +2466,10 @@ $("btnSend").onclick = () => {
 
 let sel = null;
 
-function miPaso(x){ const p = pasoActual(x); return p && p.rut === SESION.rut && p.rol !== "rrhh" ? p : null; }
+/* Una cuenta técnica no valida a nadie: no está en el organigrama. */
+function miPaso(x){ const p = pasoActual(x); return SESION.rut && p && p.rut === SESION.rut && p.rol !== "rrhh" ? p : null; }
 function visiblesParaMi(){
+  if (!SESION.rut) return [];
   return DB.solicitudes.filter(x => x.cadena.some(c => c.rut === SESION.rut && c.rol !== "rrhh"));
 }
 
@@ -2474,7 +2597,7 @@ function pintarDetalle(){
   const avanzar = async () => {
     const ok = await conRed("aprobar_etapa", { folio:x.folio, reemplazo:x.reemplazo }, () => {
       x.cadena[x.paso].estado = "aprobado"; x.cadena[x.paso].fecha = HOY; x.paso++;
-      if (x.paso >= x.cadena.length){ x.estado = "APROBADA"; x.registro = {autor:nombre(SESION.rut), fecha:HOY}; }
+      if (x.paso >= x.cadena.length){ x.estado = "APROBADA"; x.registro = {autor:nombreCuenta(actorReal()), fecha:HOY}; }
       else x.estado = "EN_CURSO";
       sellar(x);
     });
@@ -2708,7 +2831,7 @@ function formCargo(id, v){
     if (id && padre && crearCiclo(id, padre)) return err("Esa dependencia crearía un ciclo en el organigrama.");
     if (c) sellar(Object.assign(c, {nombre:n, dependeDe:padre, familia:$("c_f").value}));
     else DB.cargos.push(sellar({ id:"C"+(Date.now()%100000), nombre:n, dependeDe:padre, familia:$("c_f").value }));
-    log("Organigrama modificado", `${n} · depende de ${padre?cargoNom(padre):"nadie (raíz)"} · por ${PERMISOS[v].autor}`);
+    log("Organigrama modificado", `${n} · depende de ${padre?cargoNom(padre):"nadie (raíz)"} · por ${nombreCuenta(actorReal())}`);
     cerrar(); refrescar(v);
   };
 }
@@ -2817,7 +2940,7 @@ function pedirAnulacion(folio, v){
     if (!m) return $("fErr").innerHTML = `<div class="note err"><strong>${ic("x")}El motivo es obligatorio.</strong>Sin motivo la anulación no es auditable.</div>`;
     const ok = await conRed("pedir_anulacion", { folio:x.folio, motivo:m }, () => {
       x.anulacion = { solicitadaPor:nombreLargo(actorReal().rut), motivo:m, fecha:HOY, hora:horaAhora() }; sellar(x);
-      log("Anulación solicitada", `${x.folio} · ${nombre(x.rut)} · por ${PERMISOS[v].autor} · motivo: ${m}`);
+      log("Anulación solicitada", `${x.folio} · ${nombre(x.rut)} · por ${nombreCuenta(actorReal())} · motivo: ${m}`);
     });
     if (!ok) return;
     cerrar(); refrescar(v);
@@ -2847,7 +2970,7 @@ function cursarExcepcion(v){
     const ok = await conRed("cursar_excepcion", { rut:p.rut, desde:a, hasta:b, motivo:m }, () => {
       DB.solicitudes.unshift(sellar({ folio, rut:p.rut, desde:a, hasta:b, comentario:"", creada:HOY,
                                cadena:cadenaDe(p.rut), paso:0, estado:"EN_CURSO", reemplazo:null, excepcionAntelacion:m }));
-      log("Solicitud cursada por excepción", `${folio} · ${nombre(p.rut)} · por ${PERMISOS[v].autor} · motivo: ${m}`);
+      log("Solicitud cursada por excepción", `${folio} · ${nombre(p.rut)} · por ${nombreCuenta(actorReal())} · motivo: ${m}`);
     });
     if (!ok) return;
     cerrar(); refrescar(v);
@@ -3209,7 +3332,7 @@ function panelAnulaciones(perm, v){
         $("c").onclick = cerrar;
         $("ok").onclick = async () => {
           const ok = await conRed("anular", { folio:x.folio }, () => {
-            log("Solicitud anulada y eliminada", `${x.folio} · ${nombreLargo(x.rut)} · ${habilesDe(x)} días devueltos · pedida por ${x.anulacion.solicitadaPor} · ejecutada por ${PERMISOS[v].autor} · motivo: ${x.anulacion.motivo}`);
+            log("Solicitud anulada y eliminada", `${x.folio} · ${nombreLargo(x.rut)} · ${habilesDe(x)} días devueltos · pedida por ${x.anulacion.solicitadaPor} · ejecutada por ${nombreCuenta(actorReal())} · motivo: ${x.anulacion.motivo}`);
             DB.solicitudes = DB.solicitudes.filter(y => y.folio !== x.folio);
           });
           if (!ok) return;
@@ -3301,7 +3424,7 @@ function panelEmpresa(perm, v){
       if ($("logoDel")) $("logoDel").onclick = async () => {
         const ok = await conRed("quitar_logo", {}, () => {
           DB.empresa.logo = null; sellar(DB.empresa);
-          log("Logotipo eliminado", `${DB.empresa.nombre} · por ${PERMISOS[v].autor}`);
+          log("Logotipo eliminado", `${DB.empresa.nombre} · por ${nombreCuenta(actorReal())}`);
         });
         if (ok){ pintarComarca(); refrescar(v); }
       };
@@ -3330,7 +3453,7 @@ function subirLogo(file, v){
       if (img.width < 60 || img.height < 20) return err("La imagen es demasiado pequeña para verse bien impresa.");
       const ok = await conRed("guardar_logo", { nombre:file.name, tipo:file.type }, () => {
         DB.empresa.logo = fr.result; sellar(DB.empresa);
-        log("Logotipo actualizado", `${DB.empresa.nombre} · ${file.name} · ${Math.round(file.size/1024)} KB · por ${PERMISOS[v].autor}`);
+        log("Logotipo actualizado", `${DB.empresa.nombre} · ${file.name} · ${Math.round(file.size/1024)} KB · por ${nombreCuenta(actorReal())}`);
       });
       if (ok){ pintarComarca(); refrescar(v); }
     };
@@ -3374,7 +3497,8 @@ function pintarDotacion(perm, v){
           <td>${sd.aperturaImposible ? `<span class="chip no">${ic("x")}Apertura imposible</span>`
                : sd.alertaFeriadoCompleto ? `<span class="chip alert">${ic("clock")}Feriado sin usar</span>`
                : sd.acumulacion ? `<span class="chip alert">${ic("alert")}Acumulación</span>`
-               : `<span class="chip ok">${ic("check")}En regla</span>`}</td>
+               : `<span class="chip ok">${ic("check")}En regla</span>`}
+            ${cuentaDe(p.rut) ? `<div class="muted">${ic("shield")} con cuenta</div>` : ""}</td>
           <td class="rt"><button class="btn-ghost btn-sm" data-ed="${p.rut}">${ic("pencil")}Editar</button>
             ${perm.eliminar ? `<button class="btn-danger btn-sm" data-del="${p.rut}" style="margin-left:6px">${ic("trash")}Eliminar</button>` : ""}</td></tr>`;
       }).join("") || `<tr><td colspan="6"><div class="empty"><b>Ninguna persona cumple el filtro</b>Prueba con menos condiciones, o revisa cómo escribiste el apellido.</div></td></tr>`}</tbody>
@@ -3388,28 +3512,30 @@ function pintarDotacion(perm, v){
 }
 
 /* ---- Usuarios y accesos (solo Admin) ---- */
-const filtroUsr = { q:"", ger:"", inst:"", jefe:"", alerta:"", pag:0 };
 
 function panelUsuarios(perm, v){
-  const usuarios = conAcceso();
+  const cuentas = cuentasActivas();
   const problemas = problemasAccesos();
 
-  const filas = usuarios.map(p => `<tr>
-    <td><b>${esc(nombreLargo(p.rut))}</b><div class="muted">${esc(p.rut)} · ${esc(cargoNom(p.cargoId))}</div></td>
-    <td>${p.cuentaGoogle ? esc(p.cuentaGoogle) : `<span class="chip no">${ic("alert")}Sin cuenta: no podrá entrar</span>`}
-      <div class="muted">${p.acceso.ultimoIngreso
-       ? "último ingreso " + fmt(p.acceso.ultimoIngreso) + (p.acceso.ultimaHora ? ", " + esc(p.acceso.ultimaHora) : "")
-       : "nunca ha entrado"}</div>${lineaSello(p)}</td>
-    <td>${p.email ? esc(p.email) : `<span class="muted">usa su cuenta Google</span>`}</td>
-    <td>${p.roles.length ? p.roles.map(r => `<span class="chip rol">${ROL_NOMBRE[r]}</span>`).join("")
+  const filas = cuentas.map(c => `<tr>
+    <td><b>${esc(nombreCuenta(c))}</b>
+      <div class="muted">${c.rut ? esc(c.rut) + " · " + esc(cargoNom(P(c.rut).cargoId))
+        : `<span class="chip days">${ic("shield")}Cuenta técnica · fuera de la dotación</span>`}</div></td>
+    <td>${esc(c.cuentaGoogle)}
+      <div class="muted">${c.ultimoIngreso ? "último ingreso " + fmt(c.ultimoIngreso) + (c.ultimaHora ? ", " + esc(c.ultimaHora) : "")
+       : "nunca ha entrado"}</div></td>
+    <td>${c.rut ? esc(P(c.rut).email || "—") : `<span class="muted">${esc(c.cuentaGoogle)}</span>`}</td>
+    <td>${c.roles.length ? c.roles.map(r => `<span class="chip rol">${ROL_NOMBRE[r]}</span>`).join("")
          : `<span class="chip no">${ic("alert")}Sin perfil</span>`}</td>
     <td class="rt">
-      <button class="btn-ghost btn-sm" data-eu="${p.rut}">${ic("pencil")}Perfiles</button>
-      <button class="btn-danger btn-sm" data-xu="${p.rut}" style="margin-left:6px">${ic("x")}Revocar</button>
+      <button class="btn-ghost btn-sm" data-eu="${esc(c.cuentaGoogle)}">${ic("pencil")}Editar</button>
+      <button class="btn-danger btn-sm" data-xu="${esc(c.cuentaGoogle)}" style="margin-left:6px">${ic("x")}Revocar</button>
     </td></tr>`).join("");
 
+  const sinCuenta = DB.personas.length - cuentas.filter(c => c.rut).length;
+
   return {
-    accion:`<button class="btn-primary btn-sm" id="nuevoU">${ic("plus")}Otorgar acceso</button>`,
+    accion:`<button class="btn-primary btn-sm" id="nuevoU">${ic("plus")}Crear cuenta</button>`,
     html:`
       ${problemas.length
         ? `<div class="note err" style="margin:0 0 16px"><strong>${ic("alert")}${problemas.length} problema${problemas.length===1?"":"s"} de acceso</strong>
@@ -3418,16 +3544,18 @@ function panelUsuarios(perm, v){
            Hay administrador y Recursos Humanos activos, y todos los validadores del organigrama tienen cuenta.</div>`}
 
       <div class="scroll"><table class="tbl">
-        <thead><tr><th>Persona</th><th>Cuenta Google · identidad</th><th>Notificaciones</th><th>Perfiles</th><th></th></tr></thead>
-        <tbody>${filas || `<tr><td colspan="5"><div class="empty"><b>Nadie tiene acceso</b>Otorga el primer acceso de administrador.</div></td></tr>`}</tbody>
+        <thead><tr><th>Titular</th><th>Cuenta Google · identidad</th><th>Notificaciones</th><th>Perfiles</th><th></th></tr></thead>
+        <tbody>${filas || `<tr><td colspan="5"><div class="empty"><b>Nadie tiene acceso</b>Crea la primera cuenta de administrador.</div></td></tr>`}</tbody>
       </table></div>
 
-      <div class="note info"><strong>${ic("shield")}VACANTIA no guarda contraseñas</strong>
-        La identidad la verifica Google. Aquí solo se decide qué perfiles tiene cada cuenta. <b>La cuenta Google identifica; el correo de notificaciones recibe.</b> No tienen por qué ser el mismo.</div>
-      <div class="note warn"><strong>${ic("alert")}Sin dominio corporativo, revocar es manual</strong>
-        Las cuentas son personales. Cuando alguien se va de la empresa, su Gmail sigue existiendo: <b>revócale el acceso aquí el mismo día</b>. Con un dominio corporativo esto ocurriría solo al desactivar su cuenta.</div>
+      <div class="note info"><strong>${ic("shield")}Una cuenta no es una persona</strong>
+        Una <b>persona</b> pertenece a la dotación: tiene cargo, jefe directo y feriado. Una <b>cuenta</b> entra al sistema. A veces coinciden; a veces no. El administrador del sistema puede ser un consultor externo que administra varias empresas y no trabaja en ninguna: su cuenta no lleva persona, no figura en el organigrama y no pide vacaciones.</div>
+
       <div class="note info"><strong>${ic("info")}La dotación no necesita cuentas</strong>
-        ${DB.personas.length - usuarios.length} de ${DB.personas.length} personas no tienen acceso al sistema, y está bien: solicitan sus vacaciones con el enlace que llega a su correo. Solo necesitan cuenta quienes aprueban, registran o administran. Recursos Humanos carga la dotación; el administrador otorga los accesos.</div>`,
+        ${sinCuenta} de ${DB.personas.length} personas no tienen acceso al sistema, y está bien: solicitan sus vacaciones con el enlace que llega a su correo. Solo necesitan cuenta quienes aprueban, registran o administran.</div>
+
+      <div class="note warn"><strong>${ic("alert")}Sin dominio corporativo, revocar es manual</strong>
+        Las cuentas son personales. Cuando alguien se va de la empresa, su Gmail sigue existiendo: <b>revócale el acceso aquí el mismo día</b>.</div>`,
     bind(){
       $("nuevoU").onclick = () => formAcceso(null, v);
       [...document.querySelectorAll("[data-eu]")].forEach(b => b.onclick = () => formAcceso(b.dataset.eu, v));
@@ -3436,105 +3564,122 @@ function panelUsuarios(perm, v){
   };
 }
 
-function formAcceso(rut, v){
-  const p = rut ? P(rut) : null;
-  const sinCuenta = DB.personas.filter(x => !tieneAcceso(x));
+function formAcceso(cuentaGoogle, v){
+  const c = cuentaGoogle ? CUENTA(cuentaGoogle) : null;
+  const conCuenta = new Set(cuentasActivas().filter(x => x.rut).map(x => x.rut));
+  const libres = DB.personas.filter(p => !conCuenta.has(p.rut) || (c && c.rut === p.rut));
+  const esTecnica = c ? cuentaTecnica(c) : false;
 
-  abrir(`<h2>${p ? "Perfiles de " + esc(nombre(p.rut)) : "Otorgar acceso al sistema"}</h2>
-    <p style="color:var(--gray);margin-top:8px;font-size:14px">${p
-      ? "Los perfiles definen qué ambientes ve al entrar. No cambian su lugar en el organigrama ni quién aprueba sus vacaciones."
-      : "Elige a alguien que ya esté en la dotación. Si la persona aún no existe, créala primero en Dotación."}</p>
+  abrir(`<h2>${c ? "Editar la cuenta de " + esc(nombreCuenta(c)) : "Crear una cuenta"}</h2>
+    <p style="color:var(--gray);margin-top:8px;font-size:14px">Los perfiles definen qué ambientes ve al entrar. No cambian el organigrama ni quién aprueba las vacaciones de nadie.</p>
     <div class="fields">
-      ${p ? "" : `<div><label>Persona</label><select id="u_p">${sinCuenta.map(x =>
-        `<option value="${x.rut}">${esc(nombreLargo(x.rut))} — ${esc(cargoNom(x.cargoId))}</option>`).join("")}</select>
-        ${sinCuenta.length ? "" : `<p class="hint">Todas las personas de la dotación ya tienen acceso.</p>`}</div>`}
+      <div><label>Tipo de cuenta</label>
+        <div style="display:grid;gap:9px;margin-top:4px">
+          <label style="font-weight:400;color:var(--text);font-size:13.5px;display:flex;align-items:flex-start;gap:9px">
+            <input type="radio" name="u_tipo" value="persona" ${!esTecnica?"checked":""} style="width:auto;margin-top:3px">
+            <span><b style="font-weight:600">Una persona de la dotación</b><br>
+            <span style="color:var(--gray);font-size:12px">Trabaja en la empresa. Tiene cargo, feriado, y puede aparecer en cadenas de aprobación.</span></span></label>
+          <label style="font-weight:400;color:var(--text);font-size:13.5px;display:flex;align-items:flex-start;gap:9px">
+            <input type="radio" name="u_tipo" value="tecnica" ${esTecnica?"checked":""} style="width:auto;margin-top:3px">
+            <span><b style="font-weight:600">Cuenta técnica</b><br>
+            <span style="color:var(--gray);font-size:12px">No pertenece a la dotación. Administra el sistema. No figura en el organigrama, no devenga feriado, no valida a nadie.</span></span></label>
+        </div></div>
 
-      <div><label>Cuenta de Google — identidad</label><input id="u_google" type="email" value="${p?esc(p.cuentaGoogle||""):""}" placeholder="nombre@gmail.com">
-        <p class="hint">Exactamente la cuenta con la que esa persona entra a Google. Es lo único que el sistema mira para dejarla pasar. VACANTIA no la crea ni le asigna contraseña.</p></div>
-      <div><label>Correo para notificaciones <span style="font-weight:400">(opcional)</span></label>
-        <input id="u_mail" type="email" value="${p?esc(p.email||""):""}" placeholder="nombre@empresa.cl">
-        <p class="hint">Ahí llegan los avisos del sistema. Si lo dejas vacío, se escribirá a la cuenta Google. Conviene usar el correo de la empresa: los datos de la empresa no deberían llegar a un buzón personal.</p></div>
+      <div id="u_bloqueP"><label>Persona</label>
+        <select id="u_p" ${c ? "disabled" : ""}>${libres.map(p =>
+          `<option value="${p.rut}" ${c && c.rut === p.rut ? "selected" : ""}>${esc(nombreLargo(p.rut))} — ${esc(cargoNom(p.cargoId))}</option>`).join("")}</select>
+        ${libres.length ? "" : `<p class="hint">Todas las personas de la dotación ya tienen cuenta.</p>`}</div>
+
+      <div id="u_bloqueT" hidden><label>Nombre para mostrar</label>
+        <input id="u_nom" type="text" value="${c ? esc(c.nombre||"") : ""}" placeholder="Ej.: Administración VACANTIA">
+        <p class="hint">Aparecerá en la auditoría y en el sello de cada registro que toque.</p></div>
+
+      <div><label>Cuenta de Google — identidad</label>
+        <input id="u_google" type="email" value="${c ? esc(c.cuentaGoogle) : ""}" placeholder="nombre@gmail.com">
+        <p class="hint">Exactamente la cuenta con la que esa persona entra a Google. Es lo único que el sistema mira para dejarla pasar.</p></div>
 
       <div><label>Perfiles</label>
         <div style="display:grid;gap:9px;margin-top:4px">
           ${ROLES.map(r => `<label style="font-weight:400;color:var(--text);font-size:13.5px;display:flex;align-items:flex-start;gap:9px">
-            <input type="checkbox" class="u_rol" value="${r}" ${p && p.roles.includes(r) ? "checked" : ""} style="width:auto;margin-top:3px">
+            <input type="checkbox" class="u_rol" value="${r}" ${c && c.roles.includes(r) ? "checked" : ""} style="width:auto;margin-top:3px">
             <span><b style="font-weight:600">${ROL_NOMBRE[r]}</b><br>
             <span style="color:var(--gray);font-size:12px">${{
-              supervisor:"Aprueba las solicitudes de su equipo y propone reemplazos.",
-              gerencia:"Valida el reemplazo y puede devolverlo al supervisor.",
-              rrhh:"Cierra el proceso, mantiene la dotación y el calendario de feriados.",
-              admin:"Organigrama, accesos, anulaciones y auditoría. Otórgalo con parsimonia."
+              supervisor:"Aprueba las solicitudes de su equipo y propone reemplazos. Requiere estar en el organigrama.",
+              gerencia:"Valida el reemplazo y puede devolverlo. Requiere estar en el organigrama.",
+              rrhh:"Cierra el proceso y mantiene la dotación. Quien registra un feriado firma su comprobante: debe ser una persona.",
+              admin:"Organigrama, cuentas, anulaciones y auditoría. Otórgalo con parsimonia."
             }[r]}</span></span></label>`).join("")}
-        </div>
-        <p class="hint">Los perfiles solo deciden qué ve al entrar. Quién aprueba sus vacaciones lo decide el organigrama, no esto.</p></div>
-
-      ${p ? "" : `<div class="note info" style="margin-top:4px"><strong>${ic("shield")}No hay contraseña que entregar</strong>
-        La persona entrará con su cuenta Google de siempre. Avísale que ya tiene acceso.</div>`}
-      ${p && !p.cuentaGoogle ? `<div class="note err" style="margin-top:4px"><strong>${ic("alert")}Esta cuenta no tiene identidad</strong>
-        Tiene acceso activo pero no podrá entrar hasta que registres su cuenta de Google.</div>` : ""}
+        </div></div>
     </div>
     <div id="fErr"></div>
-    <div class="actions"><button id="g" class="btn-primary" ${!p && !sinCuenta.length ? "disabled" : ""}>${p?"Guardar perfiles":"Otorgar acceso"}</button>
+    <div class="actions"><button id="g" class="btn-primary">${c?"Guardar":"Crear cuenta"}</button>
       <button id="x" class="btn-ghost">Cancelar</button></div>`);
+
+  const alternar = () => {
+    const tec = document.querySelector('input[name="u_tipo"]:checked').value === "tecnica";
+    $("u_bloqueP").hidden = tec; $("u_bloqueT").hidden = !tec;
+  };
+  [...document.querySelectorAll('input[name="u_tipo"]')].forEach(r => r.onchange = alternar);
+  alternar();
 
   $("x").onclick = cerrar;
   $("g").onclick = async () => {
     const err = t => $("fErr").innerHTML = `<div class="note err"><strong>${ic("x")}${t}</strong></div>`;
-    const objetivo = p || P($("u_p").value);
+    const tecnica = document.querySelector('input[name="u_tipo"]:checked').value === "tecnica";
     const google = $("u_google").value.trim().toLowerCase();
-    const mail = $("u_mail").value.trim().toLowerCase();
-    const roles = [...document.querySelectorAll(".u_rol:checked")].map(c => c.value);
-    const formato = t => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(t);
+    const roles = [...document.querySelectorAll(".u_rol:checked")].map(x => x.value);
+    const rut = tecnica ? null : ($("u_p").value || null);
+    const nom = tecnica ? $("u_nom").value.trim() : "";
 
-    if (!objetivo) return err("Elige a una persona de la dotación.");
-    if (!formato(google)) return err("La cuenta de Google no tiene un formato válido.");
-    if (mail && !formato(mail)) return err("El correo de notificaciones no tiene un formato válido.");
-    const otro = porCuentaGoogle(google);
-    if (otro && otro.rut !== objetivo.rut)
-      return err(`Esa cuenta de Google ya identifica a ${nombreLargo(otro.rut)}. Una identidad no puede abrir dos puertas.`);
-    if (!roles.length) return err("Asigna al menos un perfil, o revoca el acceso en vez de dejarlo sin perfiles.");
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(google)) return err("La cuenta de Google no tiene un formato válido.");
+    const otra = CUENTA(google);
+    if (otra && (!c || otra.cuentaGoogle !== c.cuentaGoogle))
+      return err(`Esa cuenta de Google ya identifica a ${nombreCuenta(otra)}. Una identidad no puede abrir dos puertas.`);
+    if (!roles.length) return err("Asigna al menos un perfil, o revoca la cuenta en vez de dejarla sin perfiles.");
+    if (tecnica && !nom) return err("Una cuenta técnica necesita un nombre para mostrar: aparecerá en la auditoría.");
+    if (!tecnica && !rut) return err("Elige a una persona de la dotación.");
+    if (tecnica && roles.includes("rrhh"))
+      return err("Recursos Humanos firma los comprobantes de feriado. Debe ser una persona de la dotación, no una cuenta técnica.");
+    if (tecnica && (roles.includes("supervisor") || roles.includes("gerencia")))
+      return err("Supervisor y Gerencia validan según el organigrama. Una cuenta técnica no está en él: nunca le llegaría nada.");
+    if (c && c.roles.includes("admin") && !roles.includes("admin") && conRol("admin").length === 1)
+      return err("Es el único administrador activo. Otorga el perfil a otra cuenta antes de quitárselo.");
 
-    // No se puede quedar la empresa sin administrador.
-    if (p && p.roles.includes("admin") && !roles.includes("admin") && conRol("admin").length === 1)
-      return err("Es el único administrador activo. Otorga el perfil a otra persona antes de quitárselo.");
-
-    const ok = await conRed(p ? "editar_acceso" : "otorgar_acceso",
-      { rut:objetivo.rut, cuentaGoogle:google, email:mail, roles }, () => {
-        objetivo.cuentaGoogle = google; objetivo.email = mail || objetivo.email; objetivo.roles = roles; sellar(objetivo);
-        if (!p) objetivo.acceso = { activo:true, ultimoIngreso:null };
-        log(p ? "Perfiles modificados" : "Acceso otorgado",
-            `${nombreLargo(objetivo.rut)} · ${roles.map(r=>ROL_NOMBRE[r]).join(", ")} · por ${PERMISOS[v].autor}`);
+    const ok = await conRed(c ? "editar_cuenta" : "crear_cuenta",
+      { cuentaGoogle:google, anterior: c ? c.cuentaGoogle : null, rut, nombre:nom, roles }, () => {
+        if (c) Object.assign(c, { cuentaGoogle:google, rut, nombre:nom, roles });
+        else DB.cuentas.push({ cuentaGoogle:google, rut, nombre:nom, roles, activa:true, ultimoIngreso:null, ultimaHora:null });
+        log(c ? "Cuenta modificada" : "Cuenta creada",
+            `${nom || nombreLargo(rut)} · ${google} · ${roles.map(r=>ROL_NOMBRE[r]).join(", ")}${tecnica?" · técnica":""}`);
       });
     if (!ok) return;
     cerrar(); refrescar(v);
   };
 }
 
-function revocarAcceso(rut, v){
-  const p = P(rut);
-  const ultimoAdmin = p.roles.includes("admin") && conRol("admin").length === 1;
-  const ultimoRRHH  = p.roles.includes("rrhh")  && conRol("rrhh").length === 1;
-  const enCadenas = validadoresSinAcceso; // se recalcula después
-  const traba = DB.personas.some(q => cadenaDe(q.rut).some(c => c.rut === rut));
+function revocarAcceso(cuentaGoogle, v){
+  const c = CUENTA(cuentaGoogle);
+  const ultimoAdmin = c.roles.includes("admin") && conRol("admin").length === 1;
+  const ultimoRRHH  = c.roles.includes("rrhh")  && conRol("rrhh").length === 1;
+  const traba = c.rut && DB.personas.some(q => cadenaDe(q.rut).some(e => e.rut === c.rut));
 
-  abrir(`<h2>Revocar el acceso de ${esc(nombre(rut))}</h2>
-    ${ultimoAdmin ? `<div class="note err"><strong>${ic("x")}Es el único administrador activo</strong>Nadie podría volver a otorgar accesos. Designa otro administrador primero.</div>` : ""}
+  abrir(`<h2>Revocar la cuenta de ${esc(nombreCuenta(c))}</h2>
+    ${ultimoAdmin ? `<div class="note err"><strong>${ic("x")}Es el único administrador activo</strong>Nadie podría volver a otorgar accesos.</div>` : ""}
     ${ultimoRRHH ? `<div class="note err"><strong>${ic("x")}Es la única cuenta de Recursos Humanos</strong>Ninguna solicitud podría cerrarse.</div>` : ""}
     ${!ultimoAdmin && !ultimoRRHH && traba ? `<div class="note warn"><strong>${ic("alert")}Aparece en cadenas de aprobación</strong>
-      Sin cuenta no podrá validar, y las solicitudes de su línea quedarán detenidas hasta que alguien la subrogue o recupere el acceso.</div>` : ""}
-    ${!ultimoAdmin && !ultimoRRHH ? `<p style="color:var(--gray);margin-top:8px;font-size:14px">Sigue en la dotación, conserva su saldo y su correo de notificaciones. Solo pierde la identidad: podrá pedir vacaciones con el enlace, como cualquier trabajador.</p>
-      <div class="note warn"><strong>${ic("alert")}Su cuenta de Google sigue existiendo</strong>
-        VACANTIA no la puede desactivar: es personal. Lo que se corta aquí es el reconocimiento de esa cuenta.</div>` : ""}
+      Sin cuenta no podrá validar, y las solicitudes de su línea quedarán detenidas hasta que alguien la subrogue.</div>` : ""}
+    ${!ultimoAdmin && !ultimoRRHH ? (c.rut
+      ? `<p style="color:var(--gray);margin-top:8px;font-size:14px">Sigue en la dotación, conserva su saldo y su correo. Solo pierde la cuenta: podrá pedir vacaciones con el enlace, como cualquier trabajador.</p>
+         <div class="note warn"><strong>${ic("alert")}Su cuenta de Google sigue existiendo</strong>VACANTIA no la puede desactivar: es personal. Lo que se corta aquí es el reconocimiento de esa cuenta.</div>`
+      : `<p style="color:var(--gray);margin-top:8px;font-size:14px">Es una cuenta técnica: no pertenece a la dotación, así que no queda nada de ella en el sistema salvo su rastro en auditoría.</p>`) : ""}
     <div class="actions">
-      <button id="ok" class="btn-danger" ${ultimoAdmin||ultimoRRHH?"disabled":""}>${ic("x")}Revocar acceso</button>
+      <button id="ok" class="btn-danger" ${ultimoAdmin||ultimoRRHH?"disabled":""}>${ic("x")}Revocar</button>
       <button id="c" class="btn-ghost">Cancelar</button></div>`);
   $("c").onclick = cerrar;
   if (!ultimoAdmin && !ultimoRRHH) $("ok").onclick = async () => {
-    const ok = await conRed("revocar_acceso", { rut }, () => {
-      // Se le quita la identidad, no el correo: sigue recibiendo avisos como trabajador.
-      p.acceso.activo = false; p.roles = []; p.cuentaGoogle = null; sellar(p);
-      log("Acceso revocado", `${nombreLargo(rut)} · por ${PERMISOS[v].autor}`);
+    const ok = await conRed("revocar_cuenta", { cuentaGoogle }, () => {
+      c.activa = false;
+      log("Cuenta revocada", `${nombreCuenta(c)} · ${c.cuentaGoogle}`);
     });
     if (ok){ cerrar(); refrescar(v); }
   };
@@ -3573,8 +3718,8 @@ function formPersona(rut, v){
         <div><label>Fecha de ingreso</label><input id="f_ing" type="date" value="${p?p.ingreso:""}"></div>
         <div><label>Años reconocidos</label><input id="f_rec" type="number" min="0" max="10" value="${p?p.reconocidos:0}"></div>
       </div>
-      ${p && tieneAcceso(p) ? `<div class="note info" style="margin-top:0"><strong>${ic("shield")}Tiene acceso al sistema</strong>
-        Identidad: ${esc(p.cuentaGoogle||"sin cuenta Google")}. Perfiles: ${p.roles.map(r=>ROL_NOMBRE[r]).join(", ")}. Se modifican en <b>Usuarios y accesos</b>, no aquí.</div>`
+      ${p && cuentaDe(p.rut) ? `<div class="note info" style="margin-top:0"><strong>${ic("shield")}Tiene cuenta en el sistema</strong>
+        Identidad: ${esc(cuentaDe(p.rut).cuentaGoogle)}. Perfiles: ${cuentaDe(p.rut).roles.map(r=>ROL_NOMBRE[r]).join(", ")}. Se modifican en <b>Usuarios y accesos</b>, no aquí.</div>`
         : `<div class="note info" style="margin-top:0"><strong>${ic("info")}Sin acceso al sistema</strong>
         Pedirá sus vacaciones con el enlace que llega a su correo. Si necesita aprobar o administrar, el administrador debe otorgarle una cuenta.</div>`}
       <div class="blk" style="margin-top:6px">
@@ -3641,21 +3786,20 @@ function formPersona(rut, v){
       tramoLargoMigrado:$("f_tramo").checked
     };
     // La dotación no otorga permisos. Los roles y la cuenta se administran aparte.
-    if (p){ Object.assign(p, datos); sellar(p); log("Trabajador editado", `${nombreLargo(p.rut)} · por ${PERMISOS[v].autor}`); }
-    else { DB.personas.push(sellar({ rut:`${num}-${dv}`, ajustes:[], roles:[], cuentaGoogle:null,
-                              acceso:{activo:false, ultimoIngreso:null},
+    if (p){ Object.assign(p, datos); sellar(p); log("Trabajador editado", `${nombreLargo(p.rut)} · por ${nombreCuenta(actorReal())}`); }
+    else { DB.personas.push(sellar({ rut:`${num}-${dv}`, ajustes:[],
                               reconocidosRespaldo:"", progresivo:{activo:false, fecha:null, respaldo:""}, ...datos }));
-           log("Trabajador creado", `${datos.n1} ${datos.a1} · ${num}-${dv} · por ${PERMISOS[v].autor}`); }
+           log("Trabajador creado", `${datos.n1} ${datos.a1} · ${num}-${dv} · por ${nombreCuenta(actorReal())}`); }
     cerrar(); refrescar(v);
   };
 }
 
 function borrarPersona(rut, v){
-  const p0 = P(rut);
+  const cta = cuentaDe(rut);
   const usada = DB.solicitudes.some(x => (x.rut === rut || x.reemplazo === rut) && !["RECHAZADA","ANULADA"].includes(x.estado));
   const equipo = DB.personas.filter(p => p.supervisorRut === rut).length;
-  const ultimoAdmin = p0.roles.includes("admin") && conRol("admin").length === 1;
-  const ultimoRRHH  = p0.roles.includes("rrhh")  && conRol("rrhh").length === 1;
+  const ultimoAdmin = !!cta && cta.roles.includes("admin") && conRol("admin").length === 1;
+  const ultimoRRHH  = !!cta && cta.roles.includes("rrhh")  && conRol("rrhh").length === 1;
   const bloqueado = usada || ultimoAdmin || ultimoRRHH;
   abrir(`<h2>Eliminar a ${esc(nombreLargo(rut))}</h2>
     ${ultimoAdmin ? `<div class="note err"><strong>${ic("x")}Es el único administrador activo</strong>Nadie podría volver a otorgar accesos.</div>` : ""}
@@ -3667,7 +3811,8 @@ function borrarPersona(rut, v){
       <button id="c" class="btn-ghost">Cancelar</button></div>`);
   $("c").onclick = cerrar;
   if (!bloqueado) $("x").onclick = () => {
-    log("Trabajador eliminado", `${nombreLargo(rut)} · por ${PERMISOS[v].autor}`);
+    log("Trabajador eliminado", `${nombreLargo(rut)}`);
+    DB.cuentas = DB.cuentas.filter(x => x.rut !== rut);   // su cuenta muere con él
     DB.personas = DB.personas.filter(p => p.rut !== rut); cerrar(); refrescar(v);
   };
 }
@@ -3818,7 +3963,7 @@ function panelAjustes(perm, v){
           const ok = await conRed("ajustar_saldo", { rut:p.rut, dias, motivo }, () => {
             p.ajustes.push({ dias, motivo, autor:nombreLargo(actorReal().rut), fecha:HOY, hora:horaAhora() });
             sellar(p);
-            log("Ajuste de saldo", `${nombreLargo(p.rut)} · ${dias>0?"+":""}${dias} días · por ${perm.autor} · motivo: ${motivo}`);
+            log("Ajuste de saldo", `${nombreLargo(p.rut)} · ${dias>0?"+":""}${dias} días · por ${nombreCuenta(actorReal())} · motivo: ${motivo}`);
           });
           if (!ok) return;
           cerrar(); refrescar(v);
