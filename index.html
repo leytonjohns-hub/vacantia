@@ -13,6 +13,20 @@
   transformación total o parcial de esta obra sin autorización expresa
   y por escrito de su autor.
 
+  VERSIÓN 1.6 — La Gerencia General valida a sus reportes directos.
+
+  La regla anterior decía «la Gerencia General no valida a nadie», y estaba
+  mal formulada. Lo cierto es que NADIE LA VALIDA A ELLA. De ahí no se sigue
+  que no valide a nadie.
+
+  El error obligaba a colgar la Jefatura de Recursos Humanos de una gerencia
+  que no le correspondía, solo para que su feriado tuviera quien lo aprobara.
+  Si colgaba de la Gerencia General, su cadena quedaba vacía y cursaba sola.
+
+  Ahora: la Gerencia General valida a quienes le reportan directamente, sigue
+  excluida del resto de las cadenas, y su propio feriado se cursa sin
+  validación previa, con registro de Recursos Humanos.
+
   VERSIÓN 1.5 — La cuenta se separa de la persona.
 
   PERSONA ≠ CUENTA
@@ -700,7 +714,8 @@ a{color:var(--primary)}
      <a href="https://linkedin.com/in/luis-leyton-johns">LinkedIn</a> ·
      ORCID <a href="https://orcid.org/0000-0002-4462-403X">0000-0002-4462-403X</a>.
      Prohibida la reproducción, distribución o transformación total o parcial sin autorización expresa y por escrito del autor.</p>
-  <p style="margin-top:10px"><b>VACANTIA v1.5 — La cuenta se separa de la persona.</b> Una <b>persona</b> pertenece a la dotación: tiene cargo, jefe directo y feriado. Una <b>cuenta</b> entra al sistema. El administrador puede ser un consultor externo que no trabaja en la empresa: su cuenta no lleva persona, no figura en el organigrama y no pide vacaciones. Recursos Humanos, en cambio, debe ser una persona: quien registra un feriado firma su comprobante.</p>
+  <p style="margin-top:10px"><b>VACANTIA v1.6 — La Gerencia General valida a sus reportes directos.</b> Nadie la valida a ella, pero de ahí no se sigue que no valide a nadie. Ahora la Jefatura de Recursos Humanos puede colgar de la Gerencia General sin que su feriado quede sin quien lo apruebe.</p>
+  <p style="margin-top:10px"><b>v1.5 — La cuenta se separa de la persona.</b> Una <b>persona</b> pertenece a la dotación: tiene cargo, jefe directo y feriado. Una <b>cuenta</b> entra al sistema. El administrador puede ser un consultor externo que no trabaja en la empresa: su cuenta no lleva persona, no figura en el organigrama y no pide vacaciones. Recursos Humanos, en cambio, debe ser una persona: quien registra un feriado firma su comprobante.</p>
   <p style="margin-top:10px"><b>v1.4 — Conectado al backend.</b> La identidad la emite Google Identity Services: un <code>id_token</code> firmado que viaja en cada petición y que el servidor verifica contra Google. El navegador no afirma quién es; presenta una credencial que otro firmó. En modo remoto la base no se carga hasta que alguien acredita identidad, y el formulario público solo recibe los datos de la persona del enlace.</p>
   <p style="margin-top:10px"><b>v1.3 — Identidad y notificación, separadas.</b> La <b>cuenta Google</b> identifica a quien entra; el <b>correo de notificaciones</b> recibe los avisos. Un trabajador no necesita cuenta Google, solo un correo donde reciba su enlace. Sin dominio corporativo, la lista blanca de cuentas es la única defensa, y revocar el acceso de quien se va es una tarea manual que el sistema recuerda.</p>
   <p style="margin-top:10px"><b>v1.2 — Sistema vacío.</b> Arranca sin datos: el asistente de primera puesta en marcha crea la empresa, el cargo raíz, la primera instalación y la cuenta de administrador. Sin dominio corporativo, la lista blanca de correos es la única defensa: solo entra quien un administrador registró. Para ver la empresa de ejemplo, pon <code>CONFIG.datosDemo</code> en <code>true</code>.</p>
@@ -1158,18 +1173,31 @@ function problemasAccesos(){
 function cadenaDe(rut){
   const p = P(rut), out = [];
   if (!p) return out;
-  let cur = p.supervisorRut, guard = 0;
+  let cur = p.supervisorRut, guard = 0, primero = true;
 
   while (cur && guard++ < 12){
-    if (esRaiz(P(cur).cargoId)) break;               // la Gerencia General no valida a nadie
+    const pc = P(cur);
+    if (!pc) break;
+
+    /* La Gerencia General SÍ valida a quienes le reportan directamente.
+       Nadie la valida a ella —está arriba de todo— pero de ahí no se sigue
+       que no valide a nadie. Confundir ambas cosas obligaba a colgar la
+       Jefatura de RRHH de una gerencia que no le correspondía, solo para
+       que su feriado tuviera quien lo aprobara. */
+    if (esRaiz(pc.cargoId) && !primero) break;
+
     const efectivo = disponibleDesde(cur);           // subrogancia: sube si está de vacaciones
     if (!efectivo) break;
     const pe = P(efectivo);
-    if (efectivo !== rut && !out.some(o => o.rut === efectivo) && !esRaiz(pe.cargoId))
-      out.push({ rut:efectivo, rol: esGerencia(pe.cargoId) ? "gerencia" : "supervisor",
+    if (efectivo !== rut && !out.some(o => o.rut === efectivo))
+      out.push({ rut:efectivo,
+                 rol: (esGerencia(pe.cargoId) || esRaiz(pe.cargoId)) ? "gerencia" : "supervisor",
                  estado:"pendiente", subrogante: efectivo !== cur ? cur : null });
-    if (esGerencia(P(cur).cargoId)) break;           // llegamos al nivel gerencia: se corta
-    cur = P(cur).supervisorRut;
+
+    // Al llegar al nivel gerencia —o a la raíz— la cadena se corta.
+    if (esRaiz(pc.cargoId) || esGerencia(pc.cargoId)) break;
+    cur = pc.supervisorRut;
+    primero = false;
   }
 
   const rrhh = personaRRHH();
