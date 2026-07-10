@@ -1745,8 +1745,11 @@ function pintarComarca(){
    identidad—, así que no puede contar personas. Se lo pregunta al servidor.
    Sin esto, el asistente de instalación reaparecería para siempre.        */
 let SISTEMA_INSTALADO = null;
+/* «Instalado» significa que existe una CUENTA, no una persona. Un sistema
+   administrado por una cuenta técnica puede tener la dotación vacía y estar
+   perfectamente instalado. */
 const sistemaVacio = () => CONFIG.modo === "remoto" ? SISTEMA_INSTALADO === false
-                                                    : !DB.personas.length;
+                                                    : !DB.cuentas.length;
 
 function montarIngreso(){
   if (sistemaVacio()) return montarAsistente();
