@@ -3507,9 +3507,10 @@ function panelDotacion(perm, v){
     accion: perm.crear ? `<button class="btn-primary btn-sm" id="nueva">${ic("plus")}Crear trabajador</button>` : "",
     html: barraFiltros(filtroDot, true) + `<div id="cajaDot"></div>`,
     bind(){
+      // El botón se liga PRIMERO: así nunca depende de que la tabla logre dibujarse.
+      if (perm.crear) $("nueva").onclick = () => formPersona(null, v);
       ligarFiltros(filtroDot, () => pintarDotacion(perm, v), () => refrescar(v));
       pintarDotacion(perm, v);
-      if (perm.crear) $("nueva").onclick = () => formPersona(null, v);
     }
   };
 }
@@ -3525,9 +3526,14 @@ function pintarDotacion(perm, v){
     </div>
     <div class="scroll"><table class="tbl">
       <thead><tr><th>Persona</th><th>Cargo / Gerencia</th><th>Jefe directo</th><th>Por solicitar</th><th>Estado</th><th></th></tr></thead>
-      <tbody>${pagina.map(p => { const sd = saldo(p);
-        return `<tr>
-          <td><b>${esc(nombreLargo(p.rut))}</b><div class="muted">${esc(p.rut)} · ${edad(p.nacimiento)} años · ${esc(INST(p.instalacionId).nombre)}</div>${lineaSello(p)}</td>
+      <tbody>${pagina.map(p => {
+        // Una fila con datos incompletos no debe tumbar todo el panel: se aísla y se marca.
+        try {
+          const sd = saldo(p);
+          const inst = INST(p.instalacionId);
+          const instTxt = inst ? esc(inst.nombre) : `<span class="chip no" style="padding:1px 6px">sin instalación</span>`;
+          return `<tr>
+          <td><b>${esc(nombreLargo(p.rut))}</b><div class="muted">${esc(p.rut)} · ${edad(p.nacimiento)} años · ${instTxt}</div>${lineaSello(p)}</td>
           <td>${esc(cargoNom(p.cargoId))}<div class="muted">${esc(gerenciaNom(p))}</div></td>
           <td>${p.supervisorRut ? esc(nombre(p.supervisorRut)) : "<span class='muted'>raíz del organigrama</span>"}</td>
           <td class="num"><b>${fd(sd.solicitable)}</b><div class="muted">tomó ${fd(sd.tomadasPeriodo)} de ${fd(sd.derechoAnual)}</div></td>
@@ -3538,6 +3544,14 @@ function pintarDotacion(perm, v){
             ${cuentaDe(p.rut) ? `<div class="muted">${ic("shield")} con cuenta</div>` : ""}</td>
           <td class="rt"><button class="btn-ghost btn-sm" data-ed="${p.rut}">${ic("pencil")}Editar</button>
             ${perm.eliminar ? `<button class="btn-danger btn-sm" data-del="${p.rut}" style="margin-left:6px">${ic("trash")}Eliminar</button>` : ""}</td></tr>`;
+        } catch (e){
+          return `<tr>
+            <td><b>${esc(nombreLargo(p.rut))}</b><div class="muted">${esc(p.rut)}</div></td>
+            <td colspan="4"><span class="chip no">${ic("alert")}Datos incompletos — ${esc(e.message)}</span>
+              <div class="muted">Ábrela con Editar y completa lo que falte (instalación, fechas o cargo).</div></td>
+            <td class="rt"><button class="btn-ghost btn-sm" data-ed="${p.rut}">${ic("pencil")}Editar</button>
+              ${perm.eliminar ? `<button class="btn-danger btn-sm" data-del="${p.rut}" style="margin-left:6px">${ic("trash")}Eliminar</button>` : ""}</td></tr>`;
+        }
       }).join("") || `<tr><td colspan="6"><div class="empty"><b>Ninguna persona cumple el filtro</b>Prueba con menos condiciones, o revisa cómo escribiste el apellido.</div></td></tr>`}</tbody>
     </table></div>
     ${pieDePagina(filtroDot, todos.length, paginas)}`;
@@ -3810,6 +3824,8 @@ function formPersona(rut, v){
     if (!$("f_ing").value) return err("Falta la fecha de ingreso.");
     if (!$("f_apr").value.trim()) return err("Indica el respaldo del saldo de apertura. Si no lo hay, escribe que no lo hay.");
     const cid = $("f_cargo").value, sup = $("f_sup").value || null;
+    if (!cid || !CARGO(cid)) return err("Falta el cargo. Crea primero el organigrama y asígnalo aquí.");
+    if (!$("f_inst").value || !INST($("f_inst").value)) return err("Falta la instalación. Si todavía no hay ninguna, créala en «Instalaciones» antes de cargar personas.");
     if (!sup && !esRaiz(cid)) return err("Solo el cargo raíz puede no tener jefe directo.");
     if (sup && P(sup).cargoId !== CARGO(cid).dependeDe)
       return err(`Incoherencia de estructura: el cargo ${cargoNom(cid)} depende de ${cargoNom(CARGO(cid).dependeDe)}, pero el jefe elegido ocupa ${cargoNom(P(sup).cargoId)}.`);
