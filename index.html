@@ -3759,7 +3759,7 @@ function formPersona(rut, v){
         <div><label>Jefe directo</label><select id="f_sup"><option value="">Sin jefe (raíz)</option>${opciones(DB.personas.filter(x=>x.rut!==rut), p?p.supervisorRut:"")}</select></div>
       </div>
       <div class="trio">
-        <div><label>Instalación</label><select id="f_inst">${opciones(DB.instalaciones, p?p.instalacionId:"")}</select></div>
+        <div><label>Instalación</label><select id="f_pinst">${opciones(DB.instalaciones, p?p.instalacionId:"")}</select></div>
         <div><label>Tipo de contrato</label><select id="f_con">
           ${["Indefinido","Plazo fijo","Por obra o faena"].map(c=>`<option ${p&&p.contrato===c?"selected":""}>${c}</option>`).join("")}</select></div>
         <div><label>Correo para notificaciones</label><input id="f_mail" type="email" value="${p?esc(p.email||""):""}" placeholder="nombre@empresa.cl">
@@ -3800,7 +3800,7 @@ function formPersona(rut, v){
     const ing = $("f_ing").value, corte = $("f_apf").value, dias = Number($("f_ap").value)||0;
     if (!ing || !corte) return;
     if (parse(corte) < parse(ing)) return box.innerHTML = `<div class="note err"><strong>${ic("x")}La fecha de corte es anterior al ingreso</strong>No puede haber saldo antes de que la persona entre a trabajar.</div>`;
-    const fake = { ingreso:ing, reconocidos:Number($("f_rec").value)||0, instalacionId:$("f_inst").value };
+    const fake = { ingreso:ing, reconocidos:Number($("f_rec").value)||0, instalacionId:$("f_pinst").value };
     const max = aniversarios(fake, ing, corte).reduce((s,a)=>s+derechoEn(fake,a.n),0);
     const anual = derechoEn(fake, Math.max(antiguedad(ing, parse(corte)),1));
     if (dias > max + 0.001)
@@ -3809,7 +3809,7 @@ function formPersona(rut, v){
       box.innerHTML = `<div class="note warn"><strong>${ic("alert")}Nace con más de dos períodos acumulados</strong>${fd(dias)} días sobre un tope de ${fd(anual*REGLAS.periodosAcumulables)}. Quedará marcado en la reconciliación.</div>`;
   };
   $("f_cargo").addEventListener("change", hint); hint();
-  ["f_ap","f_apf","f_ing","f_rec","f_inst"].forEach(k => $(k).addEventListener("change", revisarApertura));
+  ["f_ap","f_apf","f_ing","f_rec","f_pinst"].forEach(k => $(k).addEventListener("change", revisarApertura));
   revisarApertura();
 
   $("x").onclick = cerrar;
@@ -3825,7 +3825,7 @@ function formPersona(rut, v){
     if (!$("f_apr").value.trim()) return err("Indica el respaldo del saldo de apertura. Si no lo hay, escribe que no lo hay.");
     const cid = $("f_cargo").value, sup = $("f_sup").value || null;
     if (!cid || !CARGO(cid)) return err("Falta el cargo. Crea primero el organigrama y asígnalo aquí.");
-    if (!$("f_inst").value || !INST($("f_inst").value)) return err("Falta la instalación. Si todavía no hay ninguna, créala en «Instalaciones» antes de cargar personas.");
+    if (!$("f_pinst").value || !INST($("f_pinst").value)) return err("Falta la instalación. Si todavía no hay ninguna, créala en «Instalaciones» antes de cargar personas.");
     if (!sup && !esRaiz(cid)) return err("Solo el cargo raíz puede no tener jefe directo.");
     if (sup && P(sup).cargoId !== CARGO(cid).dependeDe)
       return err(`Incoherencia de estructura: el cargo ${cargoNom(cid)} depende de ${cargoNom(CARGO(cid).dependeDe)}, pero el jefe elegido ocupa ${cargoNom(P(sup).cargoId)}.`);
@@ -3833,7 +3833,7 @@ function formPersona(rut, v){
     const datos = {
       n1:$("f_n1").value.trim(), n2:$("f_n2").value.trim(), a1:$("f_a1").value.trim(), a2:$("f_a2").value.trim(),
       nacimiento:$("f_nac").value, ingreso:$("f_ing").value, reconocidos:Number($("f_rec").value)||0,
-      cargoId:cid, instalacionId:$("f_inst").value, supervisorRut:sup, contrato:$("f_con").value,
+      cargoId:cid, instalacionId:$("f_pinst").value, supervisorRut:sup, contrato:$("f_con").value,
       email:$("f_mail").value.trim(), fono:$("f_fono").value.trim(),
       aperturaDias:Number($("f_ap").value)||0, aperturaFecha:$("f_apf").value, aperturaRespaldo:$("f_apr").value.trim(),
       tramoLargoMigrado:$("f_tramo").checked
