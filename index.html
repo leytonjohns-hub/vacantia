@@ -1261,8 +1261,16 @@ function analizarRango(a,b){
     const k = iso(d), fer = F.has(k), w = d.getDay();
     dias.push({ iso:k, n:d.getDate(), feriado:fer, inhabil: w===0 || w===6 || fer });
   }
+  // Reincorporación: primer día hábil estrictamente posterior al último día de feriado.
+  // El trabajador se reintegra al día siguiente que le corresponda trabajar (art. 69 CT y doctrina DT).
+  const re = parse(b);
+  do { re.setDate(re.getDate()+1); } while (re.getDay()===0 || re.getDay()===6 || F.has(iso(re)));
+  const reincorpora = iso(re);
+  // Días corridos del período: del inicio hasta el día previo a la reincorporación
+  // (incluye el fin de semana de salida, que queda dentro del período de descanso).
+  const corridos = Math.round((parse(reincorpora) - parse(a)) / 86400000);
   return { dias, habiles:dias.filter(d=>!d.inhabil).length, feriados:dias.filter(d=>d.feriado).length,
-           corridos:dias.length, listaFeriados:dias.filter(d=>d.feriado).map(d=>d.iso) };
+           corridos, reincorpora, listaFeriados:dias.filter(d=>d.feriado).map(d=>d.iso) };
 }
 const habilesDe = x => analizarRango(x.desde, x.hasta).habiles;
 const enPeriodo = (fecha, per) => fecha >= per.inicio && fecha < per.fin;
@@ -2568,7 +2576,8 @@ function pintarDetalle(){
       <div><dt>Gerencia</dt><dd>${esc(gerenciaNom(p))}</dd></div>
       <div><dt>Instalación</dt><dd>${esc(inst.nombre)}${inst.servicioContinuo?" · servicio continuo":""}</dd></div>
       <div><dt>Período</dt><dd>${fmt(x.desde)} — ${fmt(x.hasta)}</dd></div>
-      <div><dt>Días hábiles</dt><dd>${R.habiles} de ${R.corridos} corridos</dd></div>
+      <div><dt>Días hábiles</dt><dd>${R.habiles} hábiles · ${R.corridos} corridos</dd></div>
+      <div><dt>Se reincorpora</dt><dd>${fmt(R.reincorpora)}</dd></div>
       <div><dt>Saldo si se aprueba</dt><dd>${fd(sd.disponible)} → ${fd(sd.disponible - R.habiles)} días</dd></div>
       ${x.mod ? `<div><dt>Última modificación</dt><dd style="font-size:12.5px;color:var(--gray)">${textoSello(x)}</dd></div>` : ""}
     </dl>
@@ -4264,8 +4273,9 @@ function comprobanteHTML(x){
       <h2>Feriado otorgado</h2>
       <dl class="docgrid">
         <div><dt>Desde</dt><dd>${fmt(x.desde)}</dd></div>
-        <div><dt>Hasta</dt><dd>${fmt(x.hasta)}</dd></div>
-        <div><dt>Días hábiles</dt><dd><b>${R.habiles}</b> de ${R.corridos} días corridos</dd></div>
+        <div><dt>Hasta (último día de feriado)</dt><dd>${fmt(x.hasta)}</dd></div>
+        <div><dt>Se reincorpora</dt><dd>${fmt(R.reincorpora)}</dd></div>
+        <div><dt>Días de feriado</dt><dd><b>${R.habiles}</b> hábiles · ${R.corridos} días corridos</dd></div>
         <div><dt>Feriados nacionales en el período</dt><dd>${R.feriados ? `${R.feriados} — no descuentan días` : "Ninguno"}</dd></div>
         <div><dt>Período aniversario</dt><dd>${fmt(per.inicio)} al ${fmt(per.fin)}</dd></div>
         <div><dt>Base de feriado</dt><dd>${fd(sd.derechoAnual)} días hábiles${sd.austral?" (zona austral)":""}${progresivoEn(sd.aEmpresa, p.reconocidos) ? ` · incluye ${progresivoEn(sd.aEmpresa, p.reconocidos)} de feriado progresivo` : ""}</dd></div>
