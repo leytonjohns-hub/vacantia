@@ -3504,11 +3504,11 @@ const filtroDot = { q:"", ger:"", inst:"", jefe:"", alerta:"", pag:0 };
 
 function panelDotacion(perm, v){
   return {
-    accion: perm.crear ? `<button class="btn-primary btn-sm" id="nueva">${ic("plus")}Crear trabajador</button>` : "",
+    accion: perm.crear ? `<button class="btn-ghost btn-sm" id="masiva">${ic("file")}Carga masiva</button><button class="btn-primary btn-sm" id="nueva" style="margin-left:8px">${ic("plus")}Crear trabajador</button>` : "",
     html: barraFiltros(filtroDot, true) + `<div id="cajaDot"></div>`,
     bind(){
       // El botón se liga PRIMERO: así nunca depende de que la tabla logre dibujarse.
-      if (perm.crear) $("nueva").onclick = () => formPersona(null, v);
+      if (perm.crear){ $("nueva").onclick = () => formPersona(null, v); $("masiva").onclick = () => formCargaMasiva(v); }
       ligarFiltros(filtroDot, () => pintarDotacion(perm, v), () => refrescar(v));
       pintarDotacion(perm, v);
     }
@@ -3560,6 +3560,174 @@ function pintarDotacion(perm, v){
   [...document.querySelectorAll("[data-del]")].forEach(b => b.onclick = () => borrarPersona(b.dataset.del, v));
   ligarPaginacion(filtroDot, () => pintarDotacion(perm, v));
   ligarPastillas(filtroDot, () => pintarDotacion(perm, v), true);
+}
+
+/* ============================================================================
+   CARGA MASIVA DE DOTACIÓN
+   Se pega directo desde Excel (tabulado). Se valida fila por fila, se muestra
+   una previsualización, y solo lo válido se graba —en orden topológico, para
+   que ningún trabajador se cargue antes que su jefe—. Reutiliza guardar_persona.
+   ========================================================================= */
+
+const CM_COLS = ["RUT","Primer nombre","Segundo nombre","Primer apellido","Segundo apellido",
+  "Fecha nacimiento","Cargo","RUT jefe directo","Instalación","Fecha ingreso","Tipo de contrato",
+  "Correo","Teléfono","Años reconocidos","Días de apertura","Fecha de corte","Respaldo del saldo"];
+
+// Fecha flexible → "yyyy-mm-dd". Acepta dd-mm-aaaa, dd/mm/aaaa y aaaa-mm-dd.
+function cmFecha(s){
+  s = String(s || "").trim();
+  if (!s) return "";
+  let m = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/.exec(s);
+  if (m) return `${m[1]}-${m[2].padStart(2,"0")}-${m[3].padStart(2,"0")}`;
+  m = /^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/.exec(s);
+  if (m) return `${m[3]}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`;
+  return null;   // formato no reconocido
+}
+const cmFechaOK = f => f && !isNaN(parse(f).getTime());
+const cmRut = r => String(r || "").trim().toLowerCase().replace(/\./g,"");
+
+// Convierte el texto pegado en filas de celdas. Salta una eventual fila de encabezado.
+function cmParsear(texto){
+  const lineas = String(texto || "").replace(/\r/g,"").split("\n").map(l => l).filter(l => l.trim() !== "");
+  if (!lineas.length) return [];
+  const filas = lineas.map(l => l.split("\t").map(c => c.trim()));
+  // Si la primera fila no empieza con un RUT, se asume encabezado y se descarta.
+  if (!rutValido(cmRut(filas[0][0]))) filas.shift();
+  return filas;
+}
+
+function cmValidar(filas){
+  const porNombreCargo = {}; DB.cargos.forEach(c => porNombreCargo[norm(c.nombre)] = c);
+  const porNombreInst  = {}; DB.instalaciones.forEach(i => porNombreInst[norm(i.nombre)] = i);
+  const rutsLote = new Set();
+
+  return filas.map((f, idx) => {
+    const g = (i) => (f[i] || "").trim();
+    const err = [];
+    const rut = cmRut(g(0));
+    const cargo = porNombreCargo[norm(g(6))];
+    const inst  = porNombreInst[norm(g(8))];
+    const rutJefe = cmRut(g(7));
+    const nac = cmFecha(g(5)), ing = cmFecha(g(9)), corte = cmFecha(g(15));
+    const contrato = g(10) || "Indefinido";
+
+    if (!rutValido(rut)) err.push("RUT inválido");
+    else if (P(rut) || rutsLote.has(rut)) err.push("RUT duplicado (ya existe o repetido en el lote)");
+    rutsLote.add(rut);
+
+    if (!g(1)) err.push("Falta primer nombre");
+    if (!g(3)) err.push("Falta primer apellido");
+    if (!g(6)) err.push("Falta el cargo");
+    else if (!cargo) err.push(`Cargo «${g(6)}» no existe en el organigrama`);
+    if (!g(8)) err.push("Falta la instalación");
+    else if (!inst) err.push(`Instalación «${g(8)}» no existe`);
+    if (!g(9)) err.push("Falta fecha de ingreso");
+    else if (!cmFechaOK(ing)) err.push("Fecha de ingreso con formato inválido");
+    if (g(5) && !cmFechaOK(nac)) err.push("Fecha de nacimiento con formato inválido");
+    if (!["Indefinido","Plazo fijo","Por obra o faena"].includes(contrato))
+      err.push(`Contrato «${contrato}» no válido`);
+
+    // Jefe directo: coherente con la dependencia del cargo. El jefe puede estar en la BD o en el mismo lote.
+    if (cargo){
+      if (esRaiz(cargo.id)){
+        if (rutJefe) err.push("El cargo raíz (Gerencia General) no lleva jefe directo");
+      } else if (!rutJefe){
+        err.push("Falta el RUT del jefe directo");
+      } else {
+        const jefeBD = P(rutJefe);
+        const jefeLote = filas.find(o => cmRut(o[0]) === rutJefe);
+        const cargoJefe = jefeBD ? jefeBD.cargoId : (jefeLote ? (porNombreCargo[norm((jefeLote[6]||"").trim())]||{}).id : null);
+        if (!jefeBD && !jefeLote) err.push(`El jefe ${rutJefe} no está en la dotación ni en este lote`);
+        else if (cargoJefe !== cargo.dependeDe)
+          err.push(`El jefe no ocupa el cargo del que depende «${cargo.nombre}» (debe ocupar «${cargoNom(cargo.dependeDe)}»)`);
+      }
+    }
+
+    const dias = Number(g(14)) || 0;
+    if (corte && !cmFechaOK(corte)) err.push("Fecha de corte con formato inválido");
+    if (dias && corte && ing && cmFechaOK(corte) && cmFechaOK(ing) && parse(corte) < parse(ing))
+      err.push("La fecha de corte es anterior al ingreso");
+
+    const datos = cargo && inst ? {
+      n1:g(1), n2:g(2), a1:g(3), a2:g(4), nacimiento:nac||"", ingreso:ing||"",
+      reconocidos:Number(g(13))||0, cargoId:cargo.id, instalacionId:inst.id,
+      supervisorRut: (cargo && esRaiz(cargo.id)) ? null : (rutJefe || null),
+      contrato, email:g(11), fono:g(12),
+      aperturaDias:dias, aperturaFecha:corte||ing||HOY, aperturaRespaldo:g(16)||"Sin respaldo declarado",
+      tramoLargoMigrado:false
+    } : null;
+
+    return { n:idx+1, rut, nombre:[g(1),g(3),g(4)].filter(Boolean).join(" ")||"—",
+             cargoNombre:g(6), instNombre:g(8), profundidad: cargo?profundidad(cargo.id):999,
+             errores:err, datos };
+  });
+}
+
+function formCargaMasiva(v){
+  abrir(`<h2>Carga masiva de dotación</h2>
+    <div class="note info" style="margin-top:0"><strong>${ic("info")}Pega directo desde Excel</strong>
+      Copia las filas de tu planilla (sin necesidad del encabezado) y pégalas abajo. Las columnas, en este orden:</div>
+    <div class="scroll" style="margin:10px 0"><table class="tbl" style="font-size:11px"><thead><tr>${CM_COLS.map(c=>`<th>${c}</th>`).join("")}</tr></thead></table></div>
+    <p class="hint" style="margin-bottom:8px">El <b>RUT jefe directo</b> va con guión y dígito verificador (ej. <code>15234567-8</code>); déjalo vacío solo para la Gerencia General. El <b>Cargo</b> y la <b>Instalación</b> se escriben con el nombre exacto con que los creaste. Fechas en <code>dd-mm-aaaa</code> o <code>aaaa-mm-dd</code>.</p>
+    <textarea id="cm_txt" rows="8" style="width:100%;font-family:monospace;font-size:12px" placeholder="Pega aquí las filas copiadas desde Excel…"></textarea>
+    <div id="cmErr"></div>
+    <div class="actions"><button id="cm_val" class="btn-primary">${ic("check")}Validar</button>
+      <button id="cm_plt" class="btn-ghost">${ic("file")}Copiar plantilla (encabezado)</button>
+      <button id="x" class="btn-ghost">Cerrar</button></div>`);
+  $("x").onclick = cerrar;
+  $("cm_plt").onclick = () => { navigator.clipboard && navigator.clipboard.writeText(CM_COLS.join("\t"));
+    $("cmErr").innerHTML = `<div class="note ok"><strong>${ic("check")}Encabezado copiado</strong>Pégalo en la primera fila de una hoja de Excel y llena debajo.</div>`; };
+  $("cm_val").onclick = () => {
+    const filas = cmParsear($("cm_txt").value);
+    if (!filas.length) return $("cmErr").innerHTML = `<div class="note err"><strong>${ic("x")}No hay filas que leer</strong>Pega al menos una fila de datos.</div>`;
+    cmPreview(cmValidar(filas), v);
+  };
+}
+
+function cmPreview(res, v){
+  const ok = res.filter(r => !r.errores.length);
+  const mal = res.filter(r => r.errores.length);
+  abrir(`<h2>Previsualización — ${res.length} fila${res.length===1?"":"s"}</h2>
+    <div class="note ${mal.length?"warn":"ok"}" style="margin-top:0">
+      <strong>${ic(mal.length?"alert":"check")}${ok.length} lista${ok.length===1?"":"s"} para cargar · ${mal.length} con problemas</strong>
+      ${mal.length?"Solo se cargarán las filas válidas. Corrige las demás en Excel y vuelve a pegar.":"Todo en orden. Puedes cargar el lote completo."}</div>
+    <div class="scroll" style="max-height:46vh"><table class="tbl">
+      <thead><tr><th>#</th><th>RUT</th><th>Nombre</th><th>Cargo</th><th>Estado</th></tr></thead>
+      <tbody>${res.map(r => `<tr>
+        <td>${r.n}</td><td>${esc(r.rut)}</td><td>${esc(r.nombre)}</td><td>${esc(r.cargoNombre)}</td>
+        <td>${r.errores.length
+          ? `<span class="chip no">${ic("x")}${r.errores.map(esc).join(" · ")}</span>`
+          : `<span class="chip ok">${ic("check")}Lista</span>`}</td></tr>`).join("")}</tbody>
+    </table></div>
+    <div id="cmProg"></div>
+    <div class="actions">
+      ${ok.length?`<button id="cm_go" class="btn-primary">${ic("check")}Cargar ${ok.length} trabajador${ok.length===1?"":"es"}</button>`:""}
+      <button id="cm_back" class="btn-ghost">Volver a pegar</button>
+      <button id="x" class="btn-ghost">Cerrar</button></div>`);
+  $("x").onclick = cerrar;
+  $("cm_back").onclick = () => formCargaMasiva(v);
+  if (ok.length) $("cm_go").onclick = () => cmCargar(ok, v);
+}
+
+async function cmCargar(validos, v){
+  // Orden topológico: por profundidad de cargo ascendente → el jefe (cargo padre) se crea antes.
+  const cola = [...validos].sort((a,b) => a.profundidad - b.profundidad);
+  const btn = $("cm_go"); if (btn){ btn.disabled = true; }
+  let hechos = 0, fallidos = [];
+  for (const r of cola){
+    $("cmProg").innerHTML = `<div class="note info"><strong>${ic("clock")}Cargando… ${hechos+1} de ${cola.length}</strong>${esc(r.nombre)} (${esc(r.rut)})</div>`;
+    const ok = await conRed("guardar_persona", { rut:r.rut, datos:r.datos }, () => {
+      DB.personas.push(sellar({ rut:r.rut, ajustes:[], reconocidosRespaldo:"",
+        progresivo:{activo:false, fecha:null, respaldo:""}, ...r.datos }));
+    });
+    if (ok) hechos++; else fallidos.push(r);
+  }
+  $("cmProg").innerHTML = `<div class="note ${fallidos.length?"warn":"ok"}">
+    <strong>${ic(fallidos.length?"alert":"check")}${hechos} cargado${hechos===1?"":"s"}${fallidos.length?` · ${fallidos.length} no se pudo`:""}</strong>
+    ${fallidos.length?`No se cargaron: ${fallidos.map(r=>esc(r.rut)).join(", ")}. Revísalos y reinténtalos.`:"Dotación actualizada. Ya puedes cerrar."}</div>`;
+  log("Carga masiva", `${hechos} personas · por ${nombreCuenta(actorReal())}`);
+  const go = $("cm_go"); if (go) go.remove();
+  refrescar(v);
 }
 
 /* ---- Usuarios y accesos (solo Admin) ---- */
@@ -4124,6 +4292,24 @@ function comprobanteHTML(x){
       </table>
       ${x.excepcionAntelacion ? `<p style="font-size:10px;color:var(--gray);margin-top:10px"><b>Cursada por excepción:</b> ${esc(x.excepcionAntelacion)} Se prescindió del plazo de ${REGLAS.antelacionDias} días de anticipación por autorización de Recursos Humanos.</p>` : ""}
       ${x.registro ? `<p style="font-size:10px;color:var(--gray);margin-top:8px">Registrado por ${esc(x.registro.autor)} el ${fmt(x.registro.fecha)}.</p>` : ""}
+    </div>
+
+    <div class="docsec">
+      <h2>Fundamento normativo</h2>
+      <p style="font-size:10.5px;color:var(--gray);line-height:1.6;margin-top:12px">
+        El feriado anual se otorga conforme al Título VII del Libro I del <b>Código del Trabajo</b> (artículos 66 a 76) y al <b>Reglamento Interno de Orden, Higiene y Seguridad</b> de la empresa.
+      </p>
+      <ul style="font-size:10.5px;color:var(--gray);line-height:1.65;margin:10px 0 0;padding-left:18px">
+        <li><b>Art. 67.</b> Cumplido un año de servicio, el trabajador tiene derecho a un feriado anual de ${sd.austral ? "veinte días hábiles (regiones XI, XII y provincia de Palena)" : "quince días hábiles"}, con remuneración íntegra.</li>
+        <li><b>Art. 69.</b> Para el cómputo del feriado, el día sábado se considera siempre inhábil.</li>
+        <li><b>Art. 70.</b> El feriado debe ser continuo; el exceso sobre diez días hábiles puede fraccionarse de común acuerdo, y acumularse hasta por dos períodos consecutivos.</li>
+        <li><b>Art. 71.</b> Durante el feriado el trabajador percibe su remuneración íntegra.</li>
+        <li><b>Art. 73.</b> El feriado no puede compensarse en dinero, salvo al término del contrato de trabajo.</li>
+        ${progresivoEn(sd.aEmpresa, p.reconocidos) ? `<li><b>Art. 68.</b> Feriado progresivo: cumplidos diez años de trabajo, para uno o más empleadores, se agrega un día por cada tres nuevos años, computándose hasta diez años prestados a empleadores anteriores. Este feriado reconoce ${progresivoEn(sd.aEmpresa, p.reconocidos)} por dicho concepto.</li>` : ""}
+      </ul>
+      <p style="font-size:10px;color:var(--gray);line-height:1.55;margin-top:10px">
+        La solicitud, aprobación y registro de este feriado se ajustan al procedimiento establecido en el Reglamento Interno de Orden, Higiene y Seguridad de la empresa, conforme al artículo 153 del Código del Trabajo.
+      </p>
     </div>
 
     <div class="docverif">
