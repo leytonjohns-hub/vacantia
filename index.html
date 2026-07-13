@@ -1073,6 +1073,7 @@ function disponibleDesde(rut, guard = 0){
 
 const ROLES = ["supervisor","gerencia","rrhh","admin"];
 const ROL_NOMBRE = { supervisor:"Supervisor", gerencia:"Gerencia", rrhh:"Recursos Humanos", admin:"Administrador" };
+const JORNADA_NOMBRE = { LV:"Lunes a viernes", LS:"Lunes a sábado", "4x4":"Turno 4x4", "7x7":"Turno 7x7" };
 
 /* ---------- Cuentas ----------
    Una CUENTA entra al sistema. Una PERSONA pertenece a la dotación.
@@ -1255,22 +1256,36 @@ function periodoDe(p, fechaISO = HOY){
   return { inicio: iso(inicio), fin: iso(fin), n: y - ing.getFullYear() };
 }
 
-function analizarRango(a,b){
+function analizarRango(a,b,jornada,ancla){
+  jornada = jornada || "LV";
   const F = new Set(DB.feriados.map(f => f.fecha)), dias = [];
   for (let d = parse(a); d <= parse(b); d.setDate(d.getDate()+1)){
     const k = iso(d), fer = F.has(k), w = d.getDay();
     dias.push({ iso:k, n:d.getDate(), feriado:fer, inhabil: w===0 || w===6 || fer });
   }
-  // Reincorporación: primer día hábil estrictamente posterior al último día de feriado.
-  // El trabajador se reintegra al día siguiente que le corresponda trabajar (art. 69 CT y doctrina DT).
+  // Reincorporación según la jornada del trabajador.
+  const enTurno = (jornada==="4x4" || jornada==="7x7");
+  const T = jornada==="4x4" ? 4 : (jornada==="7x7" ? 7 : 0), ciclo = T*2;
+  const trabaja = dt => { if (!enTurno || !ancla) return true;
+    const diff = Math.round((dt - parse(ancla))/86400000);
+    return ((((diff % ciclo)+ciclo)%ciclo) < T); };
   const re = parse(b);
-  do { re.setDate(re.getDate()+1); } while (re.getDay()===0 || re.getDay()===6 || F.has(iso(re)));
+  if (enTurno && ancla){
+    // Primer día en que su turno vuelve a estar de trabajo, tras el último día de feriado.
+    do { re.setDate(re.getDate()+1); } while (!trabaja(re));
+  } else {
+    // L-V: sábado y domingo inhábiles. L-S: el sábado es laboral para el reintegro.
+    const sabInhabil = jornada !== "LS";
+    do { re.setDate(re.getDate()+1); } while (re.getDay()===0 || (sabInhabil && re.getDay()===6) || F.has(iso(re)));
+  }
   const reincorpora = iso(re);
-  // Días corridos del período: del inicio hasta el día previo a la reincorporación
-  // (incluye el fin de semana de salida, que queda dentro del período de descanso).
-  const corridos = Math.round((parse(reincorpora) - parse(a)) / 86400000);
+  // Días corridos: en L-V/L-S se cuenta hasta la reincorporación (incluye el fin de semana de salida).
+  // En turnos, el período de feriado va del inicio al último día; el descanso de ciclo no se imputa al feriado.
+  const corridos = enTurno
+    ? Math.round((parse(b) - parse(a)) / 86400000) + 1
+    : Math.round((parse(reincorpora) - parse(a)) / 86400000);
   return { dias, habiles:dias.filter(d=>!d.inhabil).length, feriados:dias.filter(d=>d.feriado).length,
-           corridos, reincorpora, listaFeriados:dias.filter(d=>d.feriado).map(d=>d.iso) };
+           corridos, reincorpora, jornada, listaFeriados:dias.filter(d=>d.feriado).map(d=>d.iso) };
 }
 const habilesDe = x => analizarRango(x.desde, x.hasta).habiles;
 const enPeriodo = (fecha, per) => fecha >= per.inicio && fecha < per.fin;
@@ -2526,7 +2541,7 @@ function pintarBandeja(){
     : `Sin pendientes · ${mias.length} solicitud${mias.length===1?"":"es"} en tu línea`;
 
   $("vList").innerHTML = mias.map(x => {
-    const R = analizarRango(x.desde, x.hasta), inst = INST(P(x.rut).instalacionId);
+    const R = analizarRango(x.desde, x.hasta, P(x.rut).jornada, P(x.rut).cicloAncla), inst = INST(P(x.rut).instalacionId);
     return `<li><button class="item" data-f="${x.folio}" aria-current="${sel===x.folio}">
       <div class="top"><span class="nm">${esc(nombre(x.rut))}</span>${chip(x)}</div>
       <div class="sub">${corto(x.desde)} — ${corto(x.hasta)} · ${x.folio} · ${esc(cargoNom(P(x.rut).cargoId))}</div>
@@ -2555,7 +2570,7 @@ function avisoFeriados(R, inst){
 function pintarDetalle(){
   const x = DB.solicitudes.find(y => y.folio === sel);
   if (!x) return;
-  const p = P(x.rut), sd = saldo(p), R = analizarRango(x.desde, x.hasta), inst = INST(p.instalacionId);
+  const p = P(x.rut), sd = saldo(p), R = analizarRango(x.desde, x.hasta, p.jornada, p.cicloAncla), inst = INST(p.instalacionId);
   const mp = miPaso(x);
   const esPrimero = mp && x.paso === 0;
   const puedoDevolver = mp && x.paso > 0 && x.reemplazo;
@@ -2893,7 +2908,7 @@ function panelSolicitudes(perm, v){
   const pend = pendientesRRHH();
   const hist = DB.solicitudes.filter(x => ["APROBADA","RECHAZADA"].includes(x.estado));
   const filaPend = x => {
-    const p = P(x.rut), R = analizarRango(x.desde, x.hasta), inst = INST(p.instalacionId);
+    const p = P(x.rut), R = analizarRango(x.desde, x.hasta, p.jornada, p.cicloAncla), inst = INST(p.instalacionId);
     return `<tr>
       <td><b>${esc(nombreLargo(x.rut))}</b><div class="muted">${x.folio} · ${esc(cargoNom(p.cargoId))}</div></td>
       <td>${fmt(x.desde)}<div class="muted">al ${fmt(x.hasta)}</div></td>
@@ -2934,7 +2949,7 @@ function panelSolicitudes(perm, v){
 }
 
 function registrar(folio, v){
-  const x = DB.solicitudes.find(y => y.folio === folio), p = P(x.rut), R = analizarRango(x.desde, x.hasta), sd = saldo(p);
+  const x = DB.solicitudes.find(y => y.folio === folio), p = P(x.rut), R = analizarRango(x.desde, x.hasta, p.jornada, p.cicloAncla), sd = saldo(p);
   abrir(`<h2>Registrar y notificar</h2>
     <p style="color:var(--gray);margin-top:8px;font-size:14px">${esAutovalidada(x)
       ? "Esta solicitud es de la Gerencia General: se cursó sin validación previa. Al registrarla se notifica a la propiedad."
@@ -3580,7 +3595,13 @@ function pintarDotacion(perm, v){
 
 const CM_COLS = ["RUT","Primer nombre","Segundo nombre","Primer apellido","Segundo apellido",
   "Fecha nacimiento","Cargo","RUT jefe directo","Instalación","Fecha ingreso","Tipo de contrato",
-  "Correo","Teléfono","Años reconocidos","Días de apertura","Fecha de corte","Respaldo del saldo"];
+  "Correo","Teléfono","Años reconocidos","Días de apertura","Fecha de corte","Respaldo del saldo",
+  "Jornada","Inicio de ciclo"];
+// Normaliza el texto de jornada de la planilla a un código interno.
+const cmJornada = s => { s = norm(s || ""); if (!s) return "LV";
+  if (s.indexOf("4x4")>=0 || s.indexOf("4×4")>=0) return "4x4";
+  if (s.indexOf("7x7")>=0 || s.indexOf("7×7")>=0) return "7x7";
+  if (s.indexOf("sabado")>=0) return "LS"; return "LV"; };
 
 // Fecha flexible → "yyyy-mm-dd". Acepta dd-mm-aaaa, dd/mm/aaaa y aaaa-mm-dd.
 function cmFecha(s){
@@ -3657,13 +3678,19 @@ function cmValidar(filas){
     if (dias && corte && ing && cmFechaOK(corte) && cmFechaOK(ing) && parse(corte) < parse(ing))
       err.push("La fecha de corte es anterior al ingreso");
 
+    const jornada = cmJornada(g(17)), ciclo = cmFecha(g(18));
+    if (["4x4","7x7"].includes(jornada) && !ciclo)
+      err.push("El turno necesita la fecha de «Inicio de ciclo»");
+    if (g(18) && !cmFechaOK(ciclo)) err.push("Inicio de ciclo con formato inválido");
+
     const datos = cargo && inst ? {
       n1:g(1), n2:g(2), a1:g(3), a2:g(4), nacimiento:nac||"", ingreso:ing||"",
       reconocidos:Number(g(13))||0, cargoId:cargo.id, instalacionId:inst.id,
       supervisorRut: (cargo && esRaiz(cargo.id)) ? null : (rutJefe || null),
       contrato, email:g(11), fono:g(12),
       aperturaDias:dias, aperturaFecha:corte||ing||HOY, aperturaRespaldo:g(16)||"Sin respaldo declarado",
-      tramoLargoMigrado:false
+      tramoLargoMigrado:false,
+      jornada, cicloAncla: ["4x4","7x7"].includes(jornada) ? ciclo : ""
     } : null;
 
     return { n:idx+1, rut, nombre:[g(1),g(3),g(4)].filter(Boolean).join(" ")||"—",
@@ -3946,6 +3973,15 @@ function formPersona(rut, v){
         <div><label>Fecha de ingreso</label><input id="f_ing" type="date" value="${p?p.ingreso:""}"></div>
         <div><label>Años reconocidos</label><input id="f_rec" type="number" min="0" max="10" value="${p?p.reconocidos:0}"></div>
       </div>
+      <div class="pair">
+        <div><label>Jornada</label><select id="f_jornada">
+          ${[["LV","Lunes a viernes"],["LS","Lunes a sábado"],["4x4","Turno 4x4"],["7x7","Turno 7x7"]]
+            .map(([v,t])=>`<option value="${v}" ${(p?(p.jornada||"LV"):"LV")===v?"selected":""}>${t}</option>`).join("")}</select>
+          <p class="hint">Determina la reincorporación al término del feriado (art. 69 CT y doctrina DT).</p></div>
+        <div id="f_cicloWrap"><label>Inicio de ciclo (turno)</label>
+          <input id="f_ciclo" type="date" value="${p&&p.cicloAncla?p.cicloAncla:""}">
+          <p class="hint">Una fecha en que el trabajador empezó un bloque de trabajo. Con eso se deduce el ciclo. Solo turnos.</p></div>
+      </div>
       ${p && cuentaDe(p.rut) ? `<div class="note info" style="margin-top:0"><strong>${ic("shield")}Tiene cuenta en el sistema</strong>
         Identidad: ${esc(cuentaDe(p.rut).cuentaGoogle)}. Perfiles: ${cuentaDe(p.rut).roles.map(r=>ROL_NOMBRE[r]).join(", ")}. Se modifican en <b>Usuarios y accesos</b>, no aquí.</div>`
         : `<div class="note info" style="margin-top:0"><strong>${ic("info")}Sin acceso al sistema</strong>
@@ -3987,6 +4023,8 @@ function formPersona(rut, v){
   };
   $("f_cargo").addEventListener("change", hint); hint();
   ["f_ap","f_apf","f_ing","f_rec","f_pinst"].forEach(k => $(k).addEventListener("change", revisarApertura));
+  const toggleCiclo = () => { $("f_cicloWrap").style.display = ["4x4","7x7"].includes($("f_jornada").value) ? "" : "none"; };
+  $("f_jornada").addEventListener("change", toggleCiclo); toggleCiclo();
   revisarApertura();
 
   $("x").onclick = cerrar;
@@ -4006,6 +4044,9 @@ function formPersona(rut, v){
     if (!sup && !esRaiz(cid)) return err("Solo el cargo raíz puede no tener jefe directo.");
     if (sup && P(sup).cargoId !== CARGO(cid).dependeDe)
       return err(`Incoherencia de estructura: el cargo ${cargoNom(cid)} depende de ${cargoNom(CARGO(cid).dependeDe)}, pero el jefe elegido ocupa ${cargoNom(P(sup).cargoId)}.`);
+    const jornada = $("f_jornada").value, ciclo = $("f_ciclo").value;
+    if (["4x4","7x7"].includes(jornada) && !ciclo)
+      return err("Los turnos necesitan la fecha de inicio de ciclo, para saber en qué punto del turno va el trabajador.");
 
     const datos = {
       n1:$("f_n1").value.trim(), n2:$("f_n2").value.trim(), a1:$("f_a1").value.trim(), a2:$("f_a2").value.trim(),
@@ -4013,7 +4054,8 @@ function formPersona(rut, v){
       cargoId:cid, instalacionId:$("f_pinst").value, supervisorRut:sup, contrato:$("f_con").value,
       email:$("f_mail").value.trim(), fono:$("f_fono").value.trim(),
       aperturaDias:Number($("f_ap").value)||0, aperturaFecha:$("f_apf").value, aperturaRespaldo:$("f_apr").value.trim(),
-      tramoLargoMigrado:$("f_tramo").checked
+      tramoLargoMigrado:$("f_tramo").checked,
+      jornada, cicloAncla: ["4x4","7x7"].includes(jornada) ? ciclo : ""
     };
     // La dotación no otorga permisos. Los roles y la cuenta se administran aparte.
     const rutp = p ? p.rut : `${num}-${dv}`;
@@ -4228,7 +4270,7 @@ function panelAjustes(perm, v){
 const VERIFICA_URL = "https://vacantia.cl/verificar";
 
 function comprobanteHTML(x){
-  const p = P(x.rut), R = analizarRango(x.desde, x.hasta), sd = saldo(p);
+  const p = P(x.rut), R = analizarRango(x.desde, x.hasta, p.jornada, p.cicloAncla), sd = saldo(p);
   const inst = INST(p.instalacionId), e = DB.empresa;
   const per = periodoDe(p, x.desde);
   const antes = nd(sd.disponible + R.habiles);   // el consumo ya está descontado
@@ -4276,6 +4318,7 @@ function comprobanteHTML(x){
         <div><dt>Hasta (último día de feriado)</dt><dd>${fmt(x.hasta)}</dd></div>
         <div><dt>Se reincorpora</dt><dd>${fmt(R.reincorpora)}</dd></div>
         <div><dt>Días de feriado</dt><dd><b>${R.habiles}</b> hábiles · ${R.corridos} días corridos</dd></div>
+        <div><dt>Jornada</dt><dd>${JORNADA_NOMBRE[p.jornada||"LV"]}</dd></div>
         <div><dt>Feriados nacionales en el período</dt><dd>${R.feriados ? `${R.feriados} — no descuentan días` : "Ninguno"}</dd></div>
         <div><dt>Período aniversario</dt><dd>${fmt(per.inicio)} al ${fmt(per.fin)}</dd></div>
         <div><dt>Base de feriado</dt><dd>${fd(sd.derechoAnual)} días hábiles${sd.austral?" (zona austral)":""}${progresivoEn(sd.aEmpresa, p.reconocidos) ? ` · incluye ${progresivoEn(sd.aEmpresa, p.reconocidos)} de feriado progresivo` : ""}</dd></div>
